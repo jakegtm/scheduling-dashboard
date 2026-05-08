@@ -1,3 +1,4 @@
+from __future__ import annotations
 # ============================================================
 # processors/variance.py — OpenAir vs Schedule Variance
 # ============================================================
