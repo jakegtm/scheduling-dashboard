@@ -9,18 +9,13 @@ from datetime import datetime
 
 from config import (LAREN_EMAIL, EMAIL_LOOKUP,
                     DEFAULT_BUDGET_THRESHOLD, DEADLINE_WARNING_DAYS)
-from email_utils import build_html_email, send_email, build_and_send_combined_emails
+from email_utils import build_html_email, send_outlook_email, build_and_send_combined_emails
 from processors.budget_actual   import process_budget_actual
 from processors.project_tracker import process_project_tracker
 from processors.month_tab       import process_month_tab, build_month_emails
 from processors.variance        import compute_variances, read_schedule_hours
 
-# ---- win32com availability ----
-try:
-    import win32com.client  # noqa
-    EMAIL_OK = True
-except ImportError:
-    EMAIL_OK = False
+# ---- Email availability ----
 
 # ============================================================
 # PAGE CONFIG
@@ -31,8 +26,8 @@ st.set_page_config(page_title="GTM Scheduling Analyzer",
 st.title("📊 GTM Scheduling Analyzer")
 st.caption(f"Today: {datetime.now().strftime('%A, %B %d, %Y')}")
 
-if not EMAIL_OK:
-    st.warning("⚠️ **Email sending disabled** — `pywin32` not installed or not on Windows. "
+if not email_configured():
+    st.warning("⚠️ **Email credentials not configured.** Add them in Streamlit Secrets to enable sending. "
                "All previews still work.")
 
 # ============================================================
@@ -278,7 +273,7 @@ with tab3:
             names = sorted(set(i["person"] for i in _no_email_m))
             st.warning(f"⚠️ No email found for: {', '.join(names)}")
 
-        if EMAIL_OK and month_issues:
+        if email_configured() and month_issues:
             hour_emails = build_month_emails(month_issues, laren_email)
             with st.expander(f"📧 Preview {len(hour_emails)} reminder email(s)"):
                 for e in hour_emails:
@@ -374,7 +369,7 @@ else:
                 st.components.v1.html(html, height=500, scrolling=True)
 
     st.divider()
-    if EMAIL_OK:
+    if email_configured():
         no_email_owners = [o for o, d in active_owners.items() if not d.get("email")]
         if no_email_owners:
             st.warning(f"⚠️ Will skip (no email): {', '.join(no_email_owners)}")
@@ -391,4 +386,4 @@ else:
             for r in fail:
                 st.write(f"  • {r['to']}: {r['status']}")
     else:
-        st.info("Email sending requires Windows + Outlook desktop.")
+        st.info("Configure email credentials in Streamlit Secrets to enable sending.")
