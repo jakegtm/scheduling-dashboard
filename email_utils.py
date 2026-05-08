@@ -1,68 +1,79 @@
 from __future__ import annotations
 # ============================================================
-# email_utils.py — Email sending via SMTP (Microsoft 365)
+# email_utils.py — Email sending via SendGrid
 # Works on Streamlit Cloud and locally.
 #
-# Credentials are stored in Streamlit secrets (never in code):
-#   .streamlit/secrets.toml  (local)
-#   Streamlit Cloud > App Settings > Secrets  (cloud)
-#
-# Required secrets format:
+# Required Streamlit secrets:
 #   [email]
-#   smtp_user     = "laren@gtmtax.com"
-#   smtp_password = "your-password-here"
+#   sendgrid_api_key = "SG.xxxxxxxxxx"
+#   from_email       = "jodonnell@gtmtax.com"
 # ============================================================
 
-import smtplib
+import urllib.request
+import urllib.error
+import json
 import streamlit as st
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from config import LAREN_EMAIL
 
-SMTP_SERVER = "smtp.office365.com"
-SMTP_PORT   = 587
 
-
-def _get_smtp_credentials() -> tuple[str, str] | tuple[None, None]:
-    """Pull SMTP credentials from Streamlit secrets."""
+def _get_credentials() -> tuple[str, str]:
+    """Pull SendGrid credentials from Streamlit secrets."""
     try:
-        user     = st.secrets["email"]["smtp_user"]
-        password = st.secrets["email"]["smtp_password"]
-        return user, password
+        api_key    = st.secrets["email"]["sendgrid_api_key"]
+        from_email = st.secrets["email"]["from_email"]
+        return api_key, from_email
     except (KeyError, FileNotFoundError):
-        return None, None
+        return "", ""
 
 
 def send_email(to_email: str, subject: str, html_body: str,
                cc_email: str = LAREN_EMAIL) -> dict:
-    """Send a single HTML email via Microsoft 365 SMTP."""
-    smtp_user, smtp_password = _get_smtp_credentials()
-    if not smtp_user or not smtp_password:
-        return {"status": "error: email credentials not configured in secrets",
+    """Send a single HTML email via SendGrid API."""
+    api_key, from_email = _get_credentials()
+    if not api_key:
+        return {"status": "error: SendGrid credentials not configured in Streamlit secrets",
                 "to": to_email}
+
+    payload = {
+        "personalizations": [{
+            "to":  [{"email": to_email}],
+            "cc":  [{"email": cc_email}] if cc_email and cc_email != to_email else [],
+        }],
+        "from":    {"email": from_email},
+        "subject": subject,
+        "content": [{"type": "text/html", "value": html_body}],
+    }
+
+    # Remove empty cc list
+    if not payload["personalizations"][0]["cc"]:
+        del payload["personalizations"][0]["cc"]
+
+    data = json.dumps(payload).encode("utf-8")
+    req  = urllib.request.Request(
+        "https://api.sendgrid.com/v3/mail/send",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type":  "application/json",
+        },
+        method="POST",
+    )
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = smtp_user
-        msg["To"]      = to_email
-        msg["CC"]      = cc_email
-        msg.attach(MIMEText(html_body, "html"))
-
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            recipients = [to_email]
-            if cc_email and cc_email != to_email:
-                recipients.append(cc_email)
-            server.sendmail(smtp_user, recipients, msg.as_string())
-
-        return {"status": "sent", "to": to_email}
-    except smtplib.SMTPAuthenticationError:
-        return {"status": "error: authentication failed — check credentials in secrets",
-                "to": to_email}
+        with urllib.request.urlopen(req) as resp:
+            if resp.status == 202:
+                return {"status": "sent", "to": to_email}
+            return {"status": f"unexpected status {resp.status}", "to": to_email}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore")
+        return {"status": f"error {e.code}: {body[:200]}", "to": to_email}
     except Exception as e:
         return {"status": f"error: {str(e)}", "to": to_email}
+
+
+def email_configured() -> bool:
+    """Return True if SendGrid credentials are present."""
+    api_key, _ = _get_credentials()
+    return bool(api_key)
 
 
 # ---- HTML STYLES ----
@@ -186,15 +197,12 @@ def build_and_send_combined_emails(owners_data: dict,
         if not owner_email:
             results.append({"to": owner, "status": "skipped: no email", "subject": ""})
             continue
-
         if not data.get("tracker") and not data.get("budget") and not data.get("variance"):
             continue
-
         html    = build_html_email(owner, data.get("tracker", []),
                                    data.get("budget", []), data.get("variance", []))
         subject = "Scheduling Review — Action Required"
         result  = send_email(owner_email, subject, html, cc_email)
         result["subject"] = subject
         results.append(result)
-
     return results
