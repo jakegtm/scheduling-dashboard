@@ -44,7 +44,7 @@ with st.sidebar:
             "Admin / CC Email",
             value=SENDER_EMAIL,
             help="CC'd on every outgoing email so the admin gets a copy of all messages.")
-        st.form_submit_button("✔ Apply", use_container_width=True)
+        st.form_submit_button("✔ Apply", use_container_width=True, key="apply_email")
 
         st.divider()
         st.subheader("💰 Budget to Actual")
@@ -55,14 +55,14 @@ with st.sidebar:
             "Flag negative budgets below -($)",
             value=int(DEFAULT_NEGATIVE_THRESHOLD), step=50, min_value=0,
             help="Flags anything more negative than this. Default $100 → below -$100.")
-        st.form_submit_button("✔ Apply", use_container_width=True)
+        st.form_submit_button("✔ Apply", use_container_width=True, key="apply_budget")
 
         st.divider()
         st.subheader("⏰ Hour Reminders")
         warn_days = st.number_input(
             "Warn X days before period deadline",
             value=DEADLINE_WARNING_DAYS, min_value=1, max_value=14)
-        st.form_submit_button("✔ Apply", use_container_width=True)
+        st.form_submit_button("✔ Apply", use_container_width=True, key="apply_hours")
 
         st.divider()
         st.subheader("📋 Email Lookup")
