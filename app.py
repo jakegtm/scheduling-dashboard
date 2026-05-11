@@ -7,10 +7,9 @@ import streamlit as st
 from collections import defaultdict
 from datetime import datetime
 
-from config import (LAREN_EMAIL, EMAIL_LOOKUP,
+from config import (SENDER_EMAIL, EMAIL_LOOKUP,
                     DEFAULT_BUDGET_THRESHOLD, DEADLINE_WARNING_DAYS)
-from email_utils import (build_html_email, send_email, email_configured,
-                         build_and_send_combined_emails)
+from email_utils import build_html_email, send_outlook_email, build_and_send_combined_emails
 from processors.budget_actual   import process_budget_actual
 from processors.project_tracker import process_project_tracker
 from processors.month_tab       import process_month_tab, build_month_emails
@@ -36,7 +35,7 @@ if not email_configured():
 # ============================================================
 with st.sidebar:
     st.header("⚙️ Settings")
-    laren_email = st.text_input("From / CC (Laren)", value=LAREN_EMAIL)
+    sender_email = st.text_input("From / CC Email", value=SENDER_EMAIL)
 
     st.divider()
     st.subheader("💰 Budget to Actual")
@@ -275,7 +274,7 @@ with tab3:
             st.warning(f"⚠️ No email found for: {', '.join(names)}")
 
         if email_configured() and month_issues:
-            hour_emails = build_month_emails(month_issues, laren_email)
+            hour_emails = build_month_emails(month_issues, sender_email)
             with st.expander(f"📧 Preview {len(hour_emails)} reminder email(s)"):
                 for e in hour_emails:
                     st.markdown(f"**To:** {e['to']}  |  **Subject:** {e['subject']}")
@@ -285,7 +284,7 @@ with tab3:
                 with st.spinner("Sending…"):
                     from email_utils import send_outlook_email as _send
                     results = [_send(e["to"], e["subject"],
-                                     f"<pre>{e['body']}</pre>", laren_email)
+                                     f"<pre>{e['body']}</pre>", sender_email)
                                for e in hour_emails]
                 sent = [r for r in results if r["status"] == "sent"]
                 fail = [r for r in results if r["status"] != "sent"]
@@ -379,7 +378,7 @@ else:
                      key="send_combined"):
             with st.spinner("Sending via Outlook…"):
                 results = build_and_send_combined_emails(
-                    active_owners, cc_email=laren_email)
+                    active_owners, cc_email=sender_email)
             sent = [r for r in results if r.get("status") == "sent"]
             fail = [r for r in results if r.get("status") != "sent"]
             if sent: st.success(f"✅ {len(sent)} email(s) sent!")
