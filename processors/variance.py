@@ -10,7 +10,7 @@ import calendar
 from collections import defaultdict
 from datetime import date
 
-VARIANCE_THRESHOLD = 3
+VARIANCE_THRESHOLD = 0
 
 
 # ---- PERIOD LABEL NORMALIZATION ----
