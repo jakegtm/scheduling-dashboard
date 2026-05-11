@@ -4,8 +4,8 @@
 
 # --- EMAIL ---
 # Testing: all emails route to J. O'Donnell
-# Production: swap LAREN_EMAIL to laren@gtmtax.com
-LAREN_EMAIL = "jodonnell@gtmtax.com"
+# Production: swap SENDER_EMAIL to the real sender address
+SENDER_EMAIL = "jodonnell@gtmtax.com"
 
 # --- THRESHOLDS (used as UI defaults, all overridable in sidebar) ---
 DEFAULT_BUDGET_THRESHOLD     = 20000  # Flag remaining unscheduled budget over this amount
