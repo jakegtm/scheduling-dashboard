@@ -2,28 +2,23 @@ from __future__ import annotations
 # ============================================================
 # processors/budget_actual.py
 # ============================================================
-# Budget to Actual — verified column layout:
-#   A(1):  Client
-#   B(2):  Project Code
-#   C(3):  Status (Known/Unknown/Closed/TBD)  <- filter to Known only
-#   H(8):  Project Owner  <- email target
-#   I(9):  Budget Amount
-#   L(12): Remaining      <- flag if negative OR > threshold
+# A(1): Client  B(2): Project Code  C(3): Status (Known only)
+# H(8): Project Owner  I(9): Budget  L(12): Remaining
 #
-# Rules (Known projects only):
-#   "negative"      : remaining < 0
-#   "not_projected" : remaining > threshold (default $20,000)
+# Flags:
+#   "negative"      : remaining < -negative_threshold  (default -$100)
+#   "not_projected" : remaining > unscheduled_threshold (default $20k)
 # ============================================================
 
 from collections import defaultdict
-from config import EMAIL_LOOKUP
+from processors.lookup import lookup_email, lookup_first_name
 
 COL_CLIENT    = 1
 COL_CODE      = 2
-COL_STATUS    = 3    # C — Known/Unknown/Closed/TBD
+COL_STATUS    = 3
 COL_OWNER     = 8
 COL_BUDGET    = 9
-COL_REMAINING = 12   # L
+COL_REMAINING = 12
 
 
 def _to_float(val):
@@ -33,23 +28,12 @@ def _to_float(val):
         return None
 
 
-def _lookup_email(name):
-    if not name:
-        return None
-    name = str(name).strip()
-    if name in EMAIL_LOOKUP:
-        return EMAIL_LOOKUP[name]
-    for key, email in EMAIL_LOOKUP.items():
-        if key.lower() == name.lower():
-            return email
-    return None
-
-
-def process_budget_actual(ws, budget_threshold: float = 20000) -> list:
+def process_budget_actual(ws,
+                          unscheduled_threshold: float = 20000,
+                          negative_threshold: float = 100) -> list:
     """
-    Return list of flagged issue dicts for Known projects only.
-    Each issue has: client, project_code, owner, owner_email,
-                    budget, remaining, type, description
+    negative_threshold: flag if remaining < -negative_threshold
+                        (positive number, e.g. 100 → flags anything below -$100)
     """
     issues = []
     consecutive_blank = 0
@@ -65,8 +49,7 @@ def process_budget_actual(ws, budget_threshold: float = 20000) -> list:
             continue
         consecutive_blank = 0
 
-        status    = str(row[COL_STATUS - 1]).strip() if row[COL_STATUS - 1] else ""
-        # Filter: only process Known projects
+        status = str(row[COL_STATUS - 1]).strip() if row[COL_STATUS - 1] else ""
         if status.lower() != "known":
             continue
 
@@ -82,20 +65,21 @@ def process_budget_actual(ws, budget_threshold: float = 20000) -> list:
             client=client,
             project_code=str(project_code).strip(),
             owner=owner,
-            owner_email=_lookup_email(owner),
+            owner_email=lookup_email(owner),
+            owner_first=lookup_first_name(owner),
             budget=budget,
             remaining=remaining,
         )
 
-        if remaining < 0:
+        if remaining < -negative_threshold:
             issues.append({**base,
                 "type": "negative",
-                "description": f"Negative budget of ({abs(remaining):,.0f})",
+                "description": f"Over budget by ${abs(remaining):,.0f}",
             })
-        elif remaining > budget_threshold:
+        elif remaining > unscheduled_threshold:
             issues.append({**base,
                 "type": "not_projected",
-                "description": f"Remaining unscheduled budget of {remaining:,.0f}",
+                "description": f"${remaining:,.0f} unscheduled",
             })
 
     return issues
@@ -105,17 +89,12 @@ def build_budget_emails(issues: list, cc_email: str) -> list:
     grouped = defaultdict(list)
     for issue in issues:
         grouped[issue["owner"]].append(issue)
-
     emails = []
     for owner, owner_issues in grouped.items():
         owner_email = owner_issues[0].get("owner_email")
         if not owner_email:
             continue
         emails.append({
-            "to":      owner_email,
-            "subject": "Scheduling Review — Action Required",
-            "owner":   owner,
-            "issues":  owner_issues,
-            "section": "budget",
+            "to": owner_email, "owner": owner, "issues": owner_issues,
         })
     return emails
