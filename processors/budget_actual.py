@@ -5,10 +5,10 @@ from __future__ import annotations
 # Budget to Actual — verified column layout:
 #   A(1):  Client
 #   B(2):  Project Code
+#   C(3):  Status (Known/Unknown/Closed/TBD)  <- filter to Known only
 #   H(8):  Project Owner  <- email target
 #   I(9):  Budget Amount
-#   J(10): Status (Known/Unknown)  <- filter to Known only
-#   L(12): Remaining               <- flag if negative OR > threshold
+#   L(12): Remaining      <- flag if negative OR > threshold
 #
 # Rules (Known projects only):
 #   "negative"      : remaining < 0
@@ -20,9 +20,9 @@ from config import EMAIL_LOOKUP
 
 COL_CLIENT    = 1
 COL_CODE      = 2
+COL_STATUS    = 3    # C — Known/Unknown/Closed/TBD
 COL_OWNER     = 8
 COL_BUDGET    = 9
-COL_STATUS    = 10   # J
 COL_REMAINING = 12   # L
 
 
@@ -66,8 +66,8 @@ def process_budget_actual(ws, budget_threshold: float = 20000) -> list:
         consecutive_blank = 0
 
         status    = str(row[COL_STATUS - 1]).strip() if row[COL_STATUS - 1] else ""
-        # Filter: only process Known projects (skip Unknown; treat blank as Known)
-        if status.lower() == "unknown":
+        # Filter: only process Known projects
+        if status.lower() != "known":
             continue
 
         client    = row[COL_CLIENT - 1]
