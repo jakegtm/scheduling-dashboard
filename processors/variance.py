@@ -202,19 +202,33 @@ def read_schedule_hours(wb, sheet_name: str) -> dict:
 
 def get_available_months(actual_data: dict, year: int = None) -> tuple[list, list]:
     """
-    Return (all_periods, future_periods) for the given year.
-    all_periods: sorted list of all period labels that appear in actual data
-    future_periods: subset of all_periods where end date > today
+    Return (all_periods, future_periods).
+    - Periods with actual data come from OpenAir.
+    - Future periods (no actuals yet) are generated for the rest of the year.
     """
     if year is None:
         year = date.today().year
 
-    # Collect periods from actual data
+    # Collect periods that have actual data
     actual_periods = set()
     for projects in actual_data.values():
         for periods in projects.values():
             for p in periods:
                 actual_periods.add(_normalize_period(p))
+
+    # Generate ALL periods for the year
+    all_generated = []
+    for month in range(1, 13):
+        last_day = calendar.monthrange(year, month)[1]
+        mon_abbr = date(year, month, 1).strftime("%b")
+        all_generated.append(f"{mon_abbr} 1-15")
+        all_generated.append(f"{mon_abbr} 16-{last_day}")
+
+    # Combine: actual periods + future periods not already in actuals
+    future_periods = [p for p in all_generated
+                      if _is_future_period(p, year) and p not in actual_periods]
+    all_periods    = [p for p in all_generated
+                      if p in actual_periods or p in future_periods]
 
     _MONTH_ORDER = {mn[:3]: i for i, mn in enumerate([
         'January','February','March','April','May','June',
@@ -227,14 +241,15 @@ def get_available_months(actual_data: dict, year: int = None) -> tuple[list, lis
         day = int(m.group(1)) if m else 0
         return (mon, day)
 
-    sorted_periods = sorted(actual_periods, key=_sort_key)
-    future = [p for p in sorted_periods if _is_future_period(p, year)]
-
-    return sorted_periods, future
+    return sorted(all_periods, key=_sort_key), future_periods
 
 
 def filter_by_months(actual_data: dict, selected_periods: list) -> dict:
-    """Filter actual_data to only selected (normalized) periods."""
+    """
+    Filter actual_data to only selected (normalized) periods.
+    Future periods with no actuals are kept as empty dicts so the
+    schedule-side hours still appear in variance output.
+    """
     selected = {_normalize_period(p) for p in selected_periods}
     result = {}
     for person, projects in actual_data.items():
@@ -304,6 +319,9 @@ def compute_variances(actual_data: dict, schedule_data: dict,
                 if diff > 0:
                     question = ("Do additional hours need to be added "
                                 "to the schedule for this project?")
+                elif _is_future_period(period, date.today().year):
+                    question = ("These are the hours scheduled for this period — "
+                                "please confirm or update as needed.")
                 elif _is_period_2(period):
                     question = "Are these scheduled hours still expected to hit?"
                 else:
@@ -321,5 +339,41 @@ def compute_variances(actual_data: dict, schedule_data: dict,
                     "question":     question,
                     "is_future":    _is_future_period(period, date.today().year),
                 })
+
+    # ---- Schedule-side pass for future periods ----
+    # For future periods, no actuals exist yet. Iterate schedule side directly.
+    future_selected = {p for p in (selected or [])
+                       if _is_future_period(p, date.today().year)}
+
+    if future_selected:
+        from processors.lookup import lookup_first_name as _lfn
+        for sched_key, sched_projects in schedule_data.items():
+            first_name = _lfn(sched_key)
+            for code, periods in sched_projects.items():
+                for period, sched_hrs in periods.items():
+                    norm = _normalize_period(period)
+                    if norm not in future_selected:
+                        continue
+                    if not sched_hrs:
+                        continue
+                    # Skip if already captured from actual-side pass
+                    if any(v["person"] == sched_key and
+                           v["project_code"] == code and
+                           v["period"] == norm
+                           for v in variances):
+                        continue
+                    variances.append({
+                        "person":       sched_key,
+                        "first_name":   first_name,
+                        "project_code": code,
+                        "oa_name":      code,
+                        "period":       norm,
+                        "actual_hours": 0.0,
+                        "sched_hours":  round(float(sched_hrs), 1),
+                        "difference":   round(-float(sched_hrs), 1),
+                        "question":     ("These are the hours scheduled for this "
+                                        "period — please confirm or update as needed."),
+                        "is_future":    True,
+                    })
 
     return variances
