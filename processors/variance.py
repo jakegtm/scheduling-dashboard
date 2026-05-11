@@ -2,24 +2,28 @@ from __future__ import annotations
 # ============================================================
 # processors/variance.py — OpenAir CSV vs Schedule Variance
 # ============================================================
-# OpenAir CSV: Project-Name, Date(MM/DD/YYYY), Employee(Last,First), Hours
-# Row 1 = title, Row 2 = headers, Row 3+ = data
-# Internal GTM rows (GTM - *) are skipped.
-# Data is day-by-day so periods are exact — no proration needed.
-#
-# Variance question logic:
-#   actual > scheduled  → "Do additional hours need to be added?"
-#   actual < scheduled, period 1 (1-15)  → "Push to another period?"
-#   actual < scheduled, period 2 (16-end) → "Still expected to hit?"
-# ============================================================
 
 import csv
 import io
 import re
+import calendar
 from collections import defaultdict
 from datetime import date
 
 VARIANCE_THRESHOLD = 3
+
+
+# ---- PERIOD LABEL NORMALIZATION ----
+
+def _normalize_period(label: str) -> str:
+    """
+    Normalize period label to consistent format with no spaces around dash.
+    'May 1 - 15' → 'May 1-15'
+    'May 16-31'  → 'May 16-31'  (already clean)
+    """
+    if not label:
+        return ""
+    return re.sub(r'\s*[-–]\s*', '-', str(label).strip())
 
 
 def _is_internal(project_name: str) -> bool:
@@ -32,7 +36,7 @@ def _last_name(employee: str) -> str:
 
 
 def _period_label(entry_date: date) -> str:
-    import calendar
+    """Return normalized period label for a date."""
     last_day = calendar.monthrange(entry_date.year, entry_date.month)[1]
     mon = entry_date.strftime("%b")
     return f"{mon} 1-15" if entry_date.day <= 15 else f"{mon} 16-{last_day}"
@@ -41,6 +45,27 @@ def _period_label(entry_date: date) -> str:
 def _is_period_2(period_label: str) -> bool:
     m = re.search(r'(\d+)\s*[-–]', str(period_label))
     return int(m.group(1)) >= 16 if m else False
+
+
+def _is_future_period(period_label: str, year: int) -> bool:
+    """Return True if the period end date is in the future."""
+    today = date.today()
+    # Parse end day
+    m = re.search(r'([A-Za-z]+)\s+\d+[-–](\d+)', str(period_label))
+    if not m:
+        return False
+    _MONTH_MAP = {mn[:3].lower(): i for i, mn in enumerate([
+        'January','February','March','April','May','June',
+        'July','August','September','October','November','December'], 1)}
+    mon_num  = _MONTH_MAP.get(m.group(1).lower()[:3])
+    end_day  = int(m.group(2))
+    if not mon_num:
+        return False
+    try:
+        end_date = date(year, mon_num, end_day)
+        return end_date > today
+    except ValueError:
+        return False
 
 
 def _normalize(s: str) -> str:
@@ -61,10 +86,13 @@ def _match_project(oa_name: str, schedule_codes: list) -> str | None:
     return best
 
 
+# ---- OPENAIR PARSER ----
+
 def parse_openair_report(file_obj, default_year: int = None) -> dict:
     """
     Parse OpenAir CSV. Returns:
         {last_name: {project_name: {period_label: hours}}}
+    Period labels are normalized (no spaces around dash).
     """
     if default_year is None:
         default_year = date.today().year
@@ -82,15 +110,14 @@ def parse_openair_report(file_obj, default_year: int = None) -> dict:
     if len(rows) < 3:
         return {}
 
-    # Row 0 = title, Row 1 = headers, Row 2+ = data
     result = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
 
     for row in rows[2:]:
         if len(row) < 4:
             continue
-        project  = row[0].strip()
-        date_str = row[1].strip()
-        employee = row[2].strip()
+        project   = row[0].strip()
+        date_str  = row[1].strip()
+        employee  = row[2].strip()
         hours_str = row[3].strip()
 
         if not project or not employee or not date_str:
@@ -113,16 +140,19 @@ def parse_openair_report(file_obj, default_year: int = None) -> dict:
             continue
 
         last   = _last_name(employee)
-        period = _period_label(entry_date)
+        period = _period_label(entry_date)   # already normalized
         result[last][project][period] += hours
 
     return {p: {proj: dict(periods) for proj, periods in projs.items()}
             for p, projs in result.items()}
 
 
+# ---- SCHEDULE READER ----
+
 def read_schedule_hours(wb, sheet_name: str) -> dict:
     """
     Read scheduled hours from a month tab.
+    Period labels are normalized to match OpenAir format.
     Returns: {last_name: {project_code: {period_label: hours}}}
     """
     ws = wb[sheet_name]
@@ -135,7 +165,8 @@ def read_schedule_hours(wb, sheet_name: str) -> dict:
     col_map = {}
     for col in range(PERSON_COL_START, PERSON_COL_END + 1):
         period_val = ws.cell(row=PERIOD_LABEL_ROW, column=col).value
-        period_str = str(period_val).strip() if period_val else ""
+        # Normalize: 'May 1 - 15' → 'May 1-15'
+        period_str = _normalize_period(str(period_val)) if period_val else ""
         pair_start = PERSON_COL_START + ((col - PERSON_COL_START) // 2) * 2
         person_val = ws.cell(row=PERSON_NAME_ROW, column=pair_start).value
         person_str = str(person_val).strip() if person_val else ""
@@ -168,16 +199,75 @@ def read_schedule_hours(wb, sheet_name: str) -> dict:
             for p, projs in schedule.items()}
 
 
+# ---- AVAILABLE PERIODS ----
+
+def get_available_months(actual_data: dict, year: int = None) -> tuple[list, list]:
+    """
+    Return (all_periods, future_periods) for the given year.
+    all_periods: sorted list of all period labels that appear in actual data
+    future_periods: subset of all_periods where end date > today
+    """
+    if year is None:
+        year = date.today().year
+
+    # Collect periods from actual data
+    actual_periods = set()
+    for projects in actual_data.values():
+        for periods in projects.values():
+            for p in periods:
+                actual_periods.add(_normalize_period(p))
+
+    _MONTH_ORDER = {mn[:3]: i for i, mn in enumerate([
+        'January','February','March','April','May','June',
+        'July','August','September','October','November','December'], 1)}
+
+    def _sort_key(p):
+        parts = p.split()
+        mon = _MONTH_ORDER.get(parts[0][:3], 99) if parts else 99
+        m = re.search(r'(\d+)', p)
+        day = int(m.group(1)) if m else 0
+        return (mon, day)
+
+    sorted_periods = sorted(actual_periods, key=_sort_key)
+    future = [p for p in sorted_periods if _is_future_period(p, year)]
+
+    return sorted_periods, future
+
+
+def filter_by_months(actual_data: dict, selected_periods: list) -> dict:
+    """Filter actual_data to only selected (normalized) periods."""
+    selected = {_normalize_period(p) for p in selected_periods}
+    result = {}
+    for person, projects in actual_data.items():
+        filtered_projects = {}
+        for proj, periods in projects.items():
+            filtered = {_normalize_period(p): h
+                        for p, h in periods.items()
+                        if _normalize_period(p) in selected}
+            if filtered:
+                filtered_projects[proj] = filtered
+        if filtered_projects:
+            result[person] = filtered_projects
+    return result
+
+
+# ---- VARIANCE CALCULATOR ----
+
 def compute_variances(actual_data: dict, schedule_data: dict,
+                      selected_periods: list = None,
                       threshold: float = VARIANCE_THRESHOLD) -> list:
     """
-    Compare actuals to schedule. Uses lookup_by_openair for name matching.
+    Compare actuals to schedule per person/project/period.
+    selected_periods: if provided, only include these periods (both sides).
     """
     from processors.lookup import lookup_by_openair, lookup_first_name
+
+    selected = ({_normalize_period(p) for p in selected_periods}
+                if selected_periods else None)
+
     variances = []
 
     for last_name, actual_projects in actual_data.items():
-        # Match OpenAir last name → schedule file key
         sched_key = lookup_by_openair(last_name)
         if sched_key is None:
             for sp in schedule_data:
@@ -194,11 +284,19 @@ def compute_variances(actual_data: dict, schedule_data: dict,
         for oa_project, actual_periods in actual_projects.items():
             matched_code  = _match_project(oa_project, sched_code_list)
             sched_periods = sched_projects.get(matched_code, {}) if matched_code else {}
-            all_periods   = set(actual_periods) | set(sched_periods)
+
+            # Normalize all period keys
+            actual_norm = {_normalize_period(p): h for p, h in actual_periods.items()}
+            sched_norm  = {_normalize_period(p): h for p, h in sched_periods.items()}
+
+            # Only include selected periods
+            all_periods = set(actual_norm) | set(sched_norm)
+            if selected:
+                all_periods = all_periods & selected
 
             for period in all_periods:
-                actual_hrs = round(actual_periods.get(period, 0.0), 1)
-                sched_hrs  = round(sched_periods.get(period, 0.0), 1)
+                actual_hrs = round(actual_norm.get(period, 0.0), 1)
+                sched_hrs  = round(sched_norm.get(period, 0.0), 1)
                 diff       = round(actual_hrs - sched_hrs, 1)
 
                 if abs(diff) <= threshold:
@@ -222,43 +320,7 @@ def compute_variances(actual_data: dict, schedule_data: dict,
                     "sched_hours":  sched_hrs,
                     "difference":   diff,
                     "question":     question,
+                    "is_future":    _is_future_period(period, date.today().year),
                 })
 
     return variances
-
-
-def get_available_months(actual_data: dict) -> list:
-    """Return sorted unique period labels from actual data."""
-    months = set()
-    for projects in actual_data.values():
-        for periods in projects.values():
-            for period in periods:
-                months.add(period)
-
-    _MONTH_ORDER = {m[:3]: i for i, m in enumerate([
-        'January','February','March','April','May','June',
-        'July','August','September','October','November','December'], 1)}
-
-    def _sort_key(p):
-        parts = p.split()
-        mon = _MONTH_ORDER.get(parts[0][:3], 99) if parts else 99
-        m = re.search(r'(\d+)', p)
-        day = int(m.group(1)) if m else 0
-        return (mon, day)
-
-    return sorted(months, key=_sort_key)
-
-
-def filter_by_months(actual_data: dict, selected_periods: list) -> dict:
-    """Filter actual_data to only the selected period labels."""
-    selected = set(selected_periods)
-    result = {}
-    for person, projects in actual_data.items():
-        filtered_projects = {}
-        for proj, periods in projects.items():
-            filtered = {p: h for p, h in periods.items() if p in selected}
-            if filtered:
-                filtered_projects[proj] = filtered
-        if filtered_projects:
-            result[person] = filtered_projects
-    return result
