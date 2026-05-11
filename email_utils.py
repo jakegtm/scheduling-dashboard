@@ -122,7 +122,7 @@ def _table(headers: list, rows: list, response_col: bool = True) -> str:
     for row in rows:
         cells = "".join(f"<td>{c}</td>" for c in row)
         if response_col:
-            cells += '<td class="response-col">Type your response here…</td>'
+            cells += '<td class="response-col">&nbsp;</td>'
         html += f"<tr>{cells}</tr>"
     html += "</tbody></table>"
     return html
@@ -182,7 +182,9 @@ def build_html_email(owner: str, tracker_issues: list,
 
     return f"""<html><head>{_CSS}</head><body>
 <p>Hi {first_name},</p>
-<p>Please review the following items and provide input for the schedule.</p>
+<p>Please review the items below and provide your input directly in the yellow response
+fields. Once complete, simply reply to this email and your responses will be on their way.
+We appreciate your time and prompt attention to these items.</p>
 {"".join(sections)}
 <p class="sig">Best,<br>Scheduling Team</p>
 </body></html>"""
