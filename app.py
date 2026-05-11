@@ -38,34 +38,39 @@ if not email_configured():
 # ============================================================
 with st.sidebar:
     st.header("⚙️ Settings")
-    sender_email = st.text_input(
-        "Admin / CC Email",
-        value=SENDER_EMAIL,
-        help="This address is CC'd on every email sent, so the admin receives "
-             "a copy of all outgoing messages.")
+    with st.form("settings_form"):
+        st.subheader("📧 Email")
+        sender_email = st.text_input(
+            "Admin / CC Email",
+            value=SENDER_EMAIL,
+            help="CC'd on every outgoing email so the admin gets a copy of all messages.")
 
-    st.divider()
-    st.subheader("💰 Budget to Actual")
-    budget_threshold = st.number_input(
-        "Flag unscheduled remaining over ($)",
-        value=int(DEFAULT_BUDGET_THRESHOLD), step=1000, min_value=0)
+        st.divider()
+        st.subheader("💰 Budget to Actual")
+        budget_threshold = st.number_input(
+            "Flag unscheduled remaining over ($)",
+            value=int(DEFAULT_BUDGET_THRESHOLD), step=1000, min_value=0)
 
-    negative_threshold = st.number_input(
-        "Flag negative budgets below -($)",
-        value=int(DEFAULT_NEGATIVE_THRESHOLD), step=50, min_value=0,
-        help="Flag if remaining is more negative than this. "
-             "Default $100 → flags anything below -$100.")
+        negative_threshold = st.number_input(
+            "Flag negative budgets below -($)",
+            value=int(DEFAULT_NEGATIVE_THRESHOLD), step=50, min_value=0,
+            help="Flags anything more negative than this. Default $100 → below -$100.")
 
-    st.divider()
-    st.subheader("⏰ Hour Reminders")
-    warn_days = st.number_input(
-        "Warn X days before period deadline",
-        value=DEADLINE_WARNING_DAYS, min_value=1, max_value=14)
+        st.divider()
+        st.subheader("⏰ Hour Reminders")
+        warn_days = st.number_input(
+            "Warn X days before period deadline",
+            value=DEADLINE_WARNING_DAYS, min_value=1, max_value=14)
 
-    st.divider()
-    st.subheader("📋 Email Lookup")
-    st.caption(f"{len(EMAIL_LOOKUP)} people configured")
-    if st.checkbox("Show lookup table"):
+        st.divider()
+        st.subheader("📋 Email Lookup")
+        st.caption(f"{len(EMAIL_LOOKUP)} people configured")
+        show_lookup = st.checkbox("Show lookup table")
+
+        st.divider()
+        st.form_submit_button("✔ Apply Settings", type="primary")
+
+    if show_lookup:
         st.dataframe([{"Name": k, "First Name": v["first_name"], "Email": v["email"]}
                       for k, v in EMAIL_LOOKUP.items()],
                      use_container_width=True, hide_index=True)
@@ -408,14 +413,19 @@ all_owner_keys = list(active_owners.keys())
 if "selected_owners" not in st.session_state:
     st.session_state.selected_owners = set(all_owner_keys)
 
-# Select All / Deselect All buttons — NO full rerun of analysis
+# Keep selected_owners in sync with current active_owners
+# (removes any stale keys from previous runs)
+st.session_state.selected_owners &= set(all_owner_keys)
+
 col_sa, col_da, _ = st.columns([0.15, 0.18, 0.67])
 with col_sa:
     if st.button("✅ Select All"):
         st.session_state.selected_owners = set(all_owner_keys)
+        st.rerun()
 with col_da:
     if st.button("⬜ Deselect All"):
         st.session_state.selected_owners = set()
+        st.rerun()
 
 # ---- Recipient list with checkboxes inside a form ----
 # Using a form prevents individual checkbox clicks from rerunning the app
