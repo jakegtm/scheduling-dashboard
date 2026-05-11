@@ -19,7 +19,7 @@ from processors.month_tab       import process_month_tab
 from processors.lookup          import lookup_first_name, lookup_email
 from processors.variance        import (parse_openair_report, read_schedule_hours,
                                         compute_variances, get_available_months,
-                                        filter_by_months)
+                                        filter_by_months, _normalize_period)
 
 # ============================================================
 # PAGE CONFIG
@@ -153,11 +153,7 @@ def run_analysis(file_bytes: bytes, budget_thr: float, neg_thr: float,
 @st.cache_data(show_spinner=False)
 def run_openair(oa_bytes: bytes, oa_name: str):
     import io
-    if oa_name.endswith(".csv"):
-        return parse_openair_report(io.BytesIO(oa_bytes))
-    else:
-        # Excel format
-        return parse_openair_report(io.BytesIO(oa_bytes))
+    return parse_openair_report(io.BytesIO(oa_bytes))
 
 
 @st.cache_data(show_spinner=False)
@@ -169,11 +165,16 @@ def run_variance(sched_bytes: bytes, actual_data: dict,
         return []
     filtered  = filter_by_months(actual_data, list(selected_months))
     sched     = read_schedule_hours(wb, active_month)
-    return compute_variances(filtered, sched)
+    return compute_variances(filtered, sched, selected_periods=list(selected_months))
 
 
-with st.spinner("Analyzing…"):
+with st.status("🔄 Analyzing schedule file...", expanded=True) as status:
+    st.write("📂 Loading workbook...")
     file_bytes = schedule_file.read()
+
+    st.write("💰 Processing Budget to Actual...")
+    st.write("📋 Processing Project Tracker...")
+    st.write("📅 Processing Month Hours...")
     (budget_issues, tracker_issues, tbd_projects,
      month_issues, active_month,
      budget_sheet_name, tracker_sheet_name, sheets) = run_analysis(
@@ -182,7 +183,10 @@ with st.spinner("Analyzing…"):
         float(negative_threshold),
         int(warn_days))
 
+    st.write("👥 Loading valid staff list...")
     valid_people = get_valid_people(file_bytes)
+
+    status.update(label="✅ Analysis complete!", state="complete", expanded=False)
 
 st.success(f"✅ Loaded **{len(sheets)}** sheet(s)")
 c1, c2, c3 = st.columns(3)
@@ -200,40 +204,68 @@ available_months = []
 openair_error    = None
 
 if openair_file:
-    try:
-        oa_bytes         = openair_file.read()
-        actual_data_full = run_openair(oa_bytes, openair_file.name)
-        available_months = get_available_months(actual_data_full)
-        has_openair      = True
-    except Exception as e:
-        openair_error = str(e)
+    with st.status("🔄 Processing OpenAir report...", expanded=True) as oa_status:
+        try:
+            st.write("📊 Parsing time entries...")
+            oa_bytes         = openair_file.read()
+            actual_data_full = run_openair(oa_bytes, openair_file.name)
+            st.write("📅 Identifying available periods...")
+            available_months, future_months = get_available_months(actual_data_full)
+            has_openair      = True
+            oa_status.update(label="✅ OpenAir loaded!", state="complete", expanded=False)
+        except Exception as e:
+            openair_error = str(e)
+            oa_status.update(label="❌ OpenAir error", state="error", expanded=True)
 
 # ============================================================
 # MONTH SELECTOR
 # ============================================================
 selected_months = []
 variance_issues = []
+future_months   = []
 
 if has_openair and available_months:
     current_abbr   = datetime.now().strftime("%b")
-    default_months = [m for m in available_months if m.startswith(current_abbr)]
+    default_months = [m for m in available_months
+                      if m.startswith(current_abbr) and m not in future_months]
     if not default_months:
-        default_months = [available_months[-1]]
+        default_months = [m for m in available_months if m not in future_months][-1:]
 
     st.subheader("📅 Variance Period Selection")
+
+    def _period_option_label(p):
+        return f"🔮 {p} (future — no actuals yet)" if p in future_months else p
+
     selected_months = st.multiselect(
         "Select period(s) for variance analysis:",
         options=available_months,
         default=default_months,
-        help="Default is current month. Multiple periods will be called out in emails.")
+        format_func=_period_option_label,
+        help="🔮 = future period (no actuals yet). Default is current month.")
 
-    if len(selected_months) > 1:
+    selected_future = [m for m in selected_months if m in future_months]
+    selected_past   = [m for m in selected_months if m not in future_months]
+
+    if selected_future and selected_past:
+        st.info(f"📢 **Mixed selection:** {', '.join(selected_past)} have actuals · "
+                f"{', '.join(selected_future)} are future (scheduled hours only)")
+    elif selected_future:
+        st.warning(f"🔮 **Future periods selected:** {', '.join(selected_future)} — "
+                   f"no actual hours exist yet, only scheduled hours will show.")
+    elif len(selected_months) > 1:
         st.info(f"📢 **Multi-period mode:** {', '.join(selected_months)}")
 
     if selected_months and active_month:
-        variance_issues = run_variance(
-            file_bytes, actual_data_full,
-            tuple(selected_months), active_month)
+        with st.status("🔄 Computing variances...", expanded=True) as var_status:
+            st.write(f"📊 Comparing actuals vs schedule for "
+                     f"{', '.join(selected_months)}...")
+            variance_issues = run_variance(
+                file_bytes, actual_data_full,
+                tuple(selected_months), active_month)
+            st.write(f"✅ Found {len(variance_issues)} variance(s) over 3 hours")
+            var_status.update(
+                label=f"✅ Variance complete — {len(variance_issues)} item(s) flagged",
+                state="complete", expanded=False)
 
     st.divider()
 
