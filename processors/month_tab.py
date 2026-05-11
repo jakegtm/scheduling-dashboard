@@ -6,7 +6,6 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from datetime import date, timedelta
-from config import PURPLE_HEX_CODES
 from processors.lookup import lookup_email, lookup_first_name
 
 PERSON_NAME_ROW  = 2
@@ -38,24 +37,6 @@ def _parse_deadline(label: str, year: int):
         return date(year, month_num, int(m.group(3)))
     except ValueError:
         return None
-
-
-def _is_done(cell) -> bool:
-    fill = cell.fill
-    if not fill or not fill.fgColor:
-        return False
-    color = fill.fgColor
-    if color.type == "theme" and color.theme == 8:
-        return True
-    if color.type == "rgb":
-        hex6 = color.rgb[-6:].upper()
-        if hex6 in PURPLE_HEX_CODES:
-            try:
-                r, g, b = int(hex6[0:2],16), int(hex6[2:4],16), int(hex6[4:6],16)
-                return r > 80 and b > 80 and g < (r + b) // 3
-            except ValueError:
-                pass
-    return False
 
 
 def _find_month_sheet(wb):
@@ -126,8 +107,6 @@ def process_month_tab(wb, deadline_warning_days: int = 2, sheet_name: str = None
                     continue
             except (ValueError, TypeError):
                 pass
-            if _is_done(cell):
-                continue
 
             person    = info["person"]
             days_left = (info["deadline"] - today).days
