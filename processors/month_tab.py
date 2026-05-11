@@ -262,8 +262,8 @@ def build_month_emails(issues: list, cc_email: str) -> list:
             lines.append(f"    * {i['client']} | {i['project_code']} | {i['hours']} hr(s)")
 
         lines.append(
-            "\n\nPlease confirm, move, or delete these hours so Laren can "
-            "finalize the schedule before the deadline.\n\nThanks,\nLaren"
+            "\n\nPlease confirm, move, or delete these hours so the schedule can be "
+            "finalize the schedule before the deadline.\n\nThanks,\nScheduling Team"
         )
 
         emails.append({
