@@ -3,6 +3,8 @@ from __future__ import annotations
 # app.py — GTM Scheduling Analyzer  |  streamlit run app.py
 # ============================================================
 
+import hashlib
+import io
 import openpyxl
 import streamlit as st
 from collections import defaultdict
@@ -41,10 +43,10 @@ with st.sidebar:
     with st.form("settings_form"):
         st.subheader("📧 Email")
         sender_email = st.text_input(
-            "Admin / CC Email",
-            value=SENDER_EMAIL,
-            help="CC'd on every outgoing email so the admin gets a copy of all messages.")
-        st.form_submit_button("✔ Apply", use_container_width=True, key="apply_email")
+            "Admin / CC Email", value=SENDER_EMAIL,
+            help="CC'd on every outgoing email so the admin gets a copy.")
+        st.form_submit_button("✔ Apply", use_container_width=True,
+                              key="apply_email")
 
         st.divider()
         st.subheader("💰 Budget to Actual")
@@ -54,15 +56,17 @@ with st.sidebar:
         negative_threshold = st.number_input(
             "Flag negative budgets below -($)",
             value=int(DEFAULT_NEGATIVE_THRESHOLD), step=50, min_value=0,
-            help="Flags anything more negative than this. Default $100 → below -$100.")
-        st.form_submit_button("✔ Apply", use_container_width=True, key="apply_budget")
+            help="Default $100 → flags anything below -$100.")
+        st.form_submit_button("✔ Apply", use_container_width=True,
+                              key="apply_budget")
 
         st.divider()
         st.subheader("⏰ Hour Reminders")
         warn_days = st.number_input(
             "Warn X days before period deadline",
             value=DEADLINE_WARNING_DAYS, min_value=1, max_value=14)
-        st.form_submit_button("✔ Apply", use_container_width=True, key="apply_hours")
+        st.form_submit_button("✔ Apply", use_container_width=True,
+                              key="apply_hours")
 
         st.divider()
         st.subheader("📋 Email Lookup")
@@ -70,7 +74,8 @@ with st.sidebar:
         show_lookup = st.checkbox("Show lookup table")
 
     if show_lookup:
-        st.dataframe([{"Name": k, "First Name": v["first_name"], "Email": v["email"]}
+        st.dataframe([{"Name": k, "First Name": v["first_name"],
+                       "Email": v["email"]}
                       for k, v in EMAIL_LOOKUP.items()],
                      use_container_width=True, hide_index=True)
 
@@ -92,43 +97,46 @@ if not schedule_file:
     st.stop()
 
 # ============================================================
-# LOAD + CACHE HEAVY PROCESSING
+# FAST HASHING — avoids re-hashing large file bytes each rerun
 # ============================================================
-@st.cache_data(show_spinner=False)
-def load_workbook_cached(file_bytes: bytes):
-    import io
-    return openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+def _hash(b: bytes) -> str:
+    return hashlib.md5(b).hexdigest()
+
+
+@st.cache_resource(show_spinner=False)
+def _load_wb(file_hash: str, _file_bytes: bytes):
+    """
+    Load workbook ONCE per unique file.
+    file_hash is the cache key (32 chars, fast to compare).
+    _file_bytes has _ prefix so Streamlit skips hashing the large bytes.
+    Uses cache_resource so the object lives in memory between reruns.
+    """
+    return openpyxl.load_workbook(io.BytesIO(_file_bytes), data_only=True)
 
 
 @st.cache_data(show_spinner=False)
-def get_valid_people(file_bytes: bytes) -> set:
-    """Read valid staff names from row 2 of the current month tab."""
-    import io
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-    today    = date.today()
-    abbr     = today.strftime("%b").lower()
-    full     = today.strftime("%B").lower()
-    ws       = None
+def get_valid_people(file_hash: str, _file_bytes: bytes) -> set:
+    wb    = _load_wb(file_hash, _file_bytes)
+    today = date.today()
+    abbr  = today.strftime("%b").lower()
+    full  = today.strftime("%B").lower()
     for name in wb.sheetnames:
-        low = name.lower().strip()
-        if low.startswith(abbr) or low.startswith(full):
+        if name.lower().strip().startswith(abbr) or \
+           name.lower().strip().startswith(full):
             ws = wb[name]
-            break
-    if ws is None:
-        return set()
-    people = set()
-    for col in range(7, 33):
-        val = ws.cell(row=2, column=col).value
-        if val:
-            people.add(str(val).strip())
-    return people
+            people = set()
+            for col in range(7, 33):
+                val = ws.cell(row=2, column=col).value
+                if val:
+                    people.add(str(val).strip())
+            return people
+    return set()
 
 
 @st.cache_data(show_spinner=False)
-def run_analysis(file_bytes: bytes, budget_thr: float, neg_thr: float,
-                 warn_d: int):
-    import io
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+def run_analysis(file_hash: str, _file_bytes: bytes,
+                 budget_thr: float, neg_thr: float, warn_d: int):
+    wb     = _load_wb(file_hash, _file_bytes)
     sheets = wb.sheetnames
 
     def find_sheet(keywords):
@@ -140,10 +148,10 @@ def run_analysis(file_bytes: bytes, budget_thr: float, neg_thr: float,
     budget_sheet  = find_sheet(["budget to actual", "budget"])
     tracker_sheet = find_sheet(["project tracker", "tracker"])
 
-    budget_issues = process_budget_actual(
+    budget_issues  = process_budget_actual(
         wb[budget_sheet], budget_thr, neg_thr) if budget_sheet else []
-    tracker_issues, tbd = process_project_tracker(
-        wb[tracker_sheet]) if tracker_sheet else ([], [])
+    tracker_issues, tbd = (process_project_tracker(wb[tracker_sheet])
+                           if tracker_sheet else ([], []))
     month_issues, active_month = process_month_tab(wb, warn_d)
 
     return (budget_issues, tracker_issues, tbd,
@@ -151,41 +159,40 @@ def run_analysis(file_bytes: bytes, budget_thr: float, neg_thr: float,
 
 
 @st.cache_data(show_spinner=False)
-def run_openair(oa_bytes: bytes, oa_name: str):
-    import io
-    return parse_openair_report(io.BytesIO(oa_bytes))
+def run_openair(oa_hash: str, _oa_bytes: bytes):
+    return parse_openair_report(io.BytesIO(_oa_bytes))
 
 
 @st.cache_data(show_spinner=False)
-def run_variance(sched_bytes: bytes, actual_data: dict,
-                 selected_months: tuple, active_month: str):
-    import io
-    wb = openpyxl.load_workbook(io.BytesIO(sched_bytes), data_only=True)
+def run_variance(file_hash: str, _file_bytes: bytes,
+                 actual_data: dict, selected_months: tuple, active_month: str):
+    wb = _load_wb(file_hash, _file_bytes)
     if not active_month or not selected_months:
         return []
-    filtered  = filter_by_months(actual_data, list(selected_months))
-    sched     = read_schedule_hours(wb, active_month)
+    filtered = filter_by_months(actual_data, list(selected_months))
+    sched    = read_schedule_hours(wb, active_month)
     return compute_variances(filtered, sched, selected_periods=list(selected_months))
 
 
+# ============================================================
+# LOAD + PROCESS
+# ============================================================
+file_bytes = schedule_file.read()
+file_hash  = _hash(file_bytes)
+
 with st.status("🔄 Analyzing schedule file...", expanded=True) as status:
     st.write("📂 Loading workbook...")
-    file_bytes = schedule_file.read()
-
     st.write("💰 Processing Budget to Actual...")
     st.write("📋 Processing Project Tracker...")
     st.write("📅 Processing Month Hours...")
     (budget_issues, tracker_issues, tbd_projects,
      month_issues, active_month,
      budget_sheet_name, tracker_sheet_name, sheets) = run_analysis(
-        file_bytes,
-        float(budget_threshold),
-        float(negative_threshold),
-        int(warn_days))
+        file_hash, file_bytes,
+        float(budget_threshold), float(negative_threshold), int(warn_days))
 
     st.write("👥 Loading valid staff list...")
-    valid_people = get_valid_people(file_bytes)
-
+    valid_people = get_valid_people(file_hash, file_bytes)
     status.update(label="✅ Analysis complete!", state="complete", expanded=False)
 
 st.success(f"✅ Loaded **{len(sheets)}** sheet(s)")
@@ -201,6 +208,7 @@ st.divider()
 actual_data_full = {}
 has_openair      = False
 available_months = []
+future_months    = []
 openair_error    = None
 
 if openair_file:
@@ -208,28 +216,31 @@ if openair_file:
         try:
             st.write("📊 Parsing time entries...")
             oa_bytes         = openair_file.read()
-            actual_data_full = run_openair(oa_bytes, openair_file.name)
+            oa_hash          = _hash(oa_bytes)
+            actual_data_full = run_openair(oa_hash, oa_bytes)
             st.write("📅 Identifying available periods...")
             available_months, future_months = get_available_months(actual_data_full)
-            has_openair      = True
-            oa_status.update(label="✅ OpenAir loaded!", state="complete", expanded=False)
+            has_openair = True
+            oa_status.update(label="✅ OpenAir loaded!", state="complete",
+                             expanded=False)
         except Exception as e:
             openair_error = str(e)
-            oa_status.update(label="❌ OpenAir error", state="error", expanded=True)
+            oa_status.update(label="❌ OpenAir error", state="error",
+                             expanded=True)
 
 # ============================================================
 # MONTH SELECTOR
 # ============================================================
 selected_months = []
 variance_issues = []
-future_months   = []
 
 if has_openair and available_months:
     current_abbr   = datetime.now().strftime("%b")
     default_months = [m for m in available_months
                       if m.startswith(current_abbr) and m not in future_months]
     if not default_months:
-        default_months = [m for m in available_months if m not in future_months][-1:]
+        default_months = [m for m in available_months
+                          if m not in future_months][-1:]
 
     st.subheader("📅 Variance Period Selection")
 
@@ -241,33 +252,31 @@ if has_openair and available_months:
         options=available_months,
         default=default_months,
         format_func=_period_option_label,
-        help="🔮 = future period (no actuals yet). Default is current month.")
+        help="🔮 = future period. Default is current month.")
 
     selected_future = [m for m in selected_months if m in future_months]
     selected_past   = [m for m in selected_months if m not in future_months]
 
     if selected_future and selected_past:
-        st.info(f"📢 **Mixed selection:** {', '.join(selected_past)} have actuals · "
-                f"{', '.join(selected_future)} are future (scheduled hours only)")
+        st.info(f"📢 **Mixed:** {', '.join(selected_past)} have actuals · "
+                f"{', '.join(selected_future)} are future (scheduled only)")
     elif selected_future:
-        st.warning(f"🔮 **Future periods selected:** {', '.join(selected_future)} — "
-                   f"no actual hours exist yet, only scheduled hours will show.")
+        st.warning(f"🔮 **Future selected:** {', '.join(selected_future)} — "
+                   f"no actuals yet, only scheduled hours will show.")
     elif len(selected_months) > 1:
-        st.info(f"📢 **Multi-period mode:** {', '.join(selected_months)}")
+        st.info(f"📢 **Multi-period:** {', '.join(selected_months)}")
 
     if selected_months and active_month:
         with st.status("🔄 Computing variances...", expanded=True) as var_status:
             st.write(f"📊 Comparing actuals vs schedule for "
                      f"{', '.join(selected_months)}...")
             variance_issues = run_variance(
-                file_bytes, actual_data_full,
+                file_hash, file_bytes, actual_data_full,
                 tuple(selected_months), active_month)
-            st.write(f"✅ Found {len(variance_issues)} variance(s) over 3 hours")
+            st.write(f"✅ Found {len(variance_issues)} variance(s)")
             var_status.update(
-                label=f"✅ Variance complete — {len(variance_issues)} item(s) flagged",
+                label=f"✅ Variance complete — {len(variance_issues)} flagged",
                 state="complete", expanded=False)
-
-    st.divider()
 
 # ============================================================
 # BUILD OWNER DATA — filtered to valid schedule people only
@@ -413,14 +422,15 @@ with tab4:
             st.warning(f"📢 Showing variances across "
                        f"**{len(selected_months)} periods**: "
                        f"{', '.join(selected_months)}")
-        st.metric("⚠️ Variances > 3 hrs", len(variance_issues))
+        st.metric("⚠️ Variances Found", len(variance_issues))
         st.dataframe([{"Person": v["first_name"],
                        "Project": v["project_code"],
                        "Period": v["period"],
                        "Actual Hrs": v["actual_hours"],
                        "Sched Hrs": v["sched_hours"],
                        "Diff": v["difference"],
-                       "To Review": v["question"]}
+                       "To Review": v["question"],
+                       "Future": "🔮" if v.get("is_future") else ""}
                       for v in variance_issues],
                      use_container_width=True, hide_index=True)
 
@@ -438,28 +448,30 @@ if not active_owners:
 
 st.metric("People with flagged items", len(active_owners))
 
-# ---- Session state for checkbox selections ----
 all_owner_keys = list(active_owners.keys())
 
 if "selected_owners" not in st.session_state:
     st.session_state.selected_owners = set(all_owner_keys)
+    for owner in all_owner_keys:
+        if f"chk_{owner}" not in st.session_state:
+            st.session_state[f"chk_{owner}"] = True
 
-# Keep selected_owners in sync with current active_owners
-# (removes any stale keys from previous runs)
 st.session_state.selected_owners &= set(all_owner_keys)
 
 col_sa, col_da, _ = st.columns([0.15, 0.18, 0.67])
 with col_sa:
     if st.button("✅ Select All"):
         st.session_state.selected_owners = set(all_owner_keys)
+        for owner in all_owner_keys:
+            st.session_state[f"chk_{owner}"] = True
         st.rerun()
 with col_da:
     if st.button("⬜ Deselect All"):
         st.session_state.selected_owners = set()
+        for owner in all_owner_keys:
+            st.session_state[f"chk_{owner}"] = False
         st.rerun()
 
-# ---- Recipient list with checkboxes inside a form ----
-# Using a form prevents individual checkbox clicks from rerunning the app
 st.markdown("**Select recipients:**")
 with st.form("recipient_form"):
     form_checks = {}
@@ -474,19 +486,16 @@ with st.form("recipient_form"):
                  f"Variance: {len(data['variance'])}")
         form_checks[owner] = st.checkbox(
             label,
-            value=owner in st.session_state.selected_owners,
             key=f"chk_{owner}")
 
-    confirmed = st.form_submit_button("✔ Confirm Selection")
-    if confirmed:
+    if st.form_submit_button("✔ Confirm Selection"):
         st.session_state.selected_owners = {
             o for o, v in form_checks.items() if v}
         st.success(f"Selection updated: "
-                   f"{len(st.session_state.selected_owners)} people selected.")
+                   f"{len(st.session_state.selected_owners)} selected.")
 
 selected_owners = list(st.session_state.selected_owners)
 
-# ---- Email Previews ----
 st.markdown("**Email previews:**")
 for owner in selected_owners:
     if owner not in active_owners:
@@ -515,7 +524,7 @@ no_email_selected = [o for o in selected_owners
                      if not active_owners.get(o, {}).get("email")]
 if no_email_selected:
     names = [active_owners[o]["first_name"] for o in no_email_selected]
-    st.warning(f"⚠️ No email configured for: {', '.join(names)} — will be skipped.")
+    st.warning(f"⚠️ No email for: {', '.join(names)} — will be skipped.")
 
 sendable_selected = [o for o in selected_owners
                      if active_owners.get(o, {}).get("email")]
