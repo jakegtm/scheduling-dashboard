@@ -48,22 +48,21 @@ def _is_period_2(period_label: str) -> bool:
 
 
 def _is_future_period(period_label: str, year: int) -> bool:
-    """Return True if the period end date is in the future."""
+    """Return True only if the period START date is after today (no actuals possible yet)."""
     today = date.today()
-    # Parse end day
-    m = re.search(r'([A-Za-z]+)\s+\d+[-–](\d+)', str(period_label))
+    m = re.search(r'([A-Za-z]+)\s+(\d+)[-–]', str(period_label))
     if not m:
         return False
     _MONTH_MAP = {mn[:3].lower(): i for i, mn in enumerate([
         'January','February','March','April','May','June',
         'July','August','September','October','November','December'], 1)}
-    mon_num  = _MONTH_MAP.get(m.group(1).lower()[:3])
-    end_day  = int(m.group(2))
+    mon_num   = _MONTH_MAP.get(m.group(1).lower()[:3])
+    start_day = int(m.group(2))
     if not mon_num:
         return False
     try:
-        end_date = date(year, mon_num, end_day)
-        return end_date > today
+        start_date = date(year, mon_num, start_day)
+        return start_date > today
     except ValueError:
         return False
 
