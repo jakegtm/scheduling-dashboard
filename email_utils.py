@@ -13,7 +13,7 @@ import urllib.request
 import urllib.error
 import json
 import streamlit as st
-from config import LAREN_EMAIL
+from config import SENDER_EMAIL
 
 
 def _get_credentials() -> tuple[str, str]:
@@ -27,7 +27,7 @@ def _get_credentials() -> tuple[str, str]:
 
 
 def send_email(to_email: str, subject: str, html_body: str,
-               cc_email: str = LAREN_EMAIL) -> dict:
+               cc_email: str = SENDER_EMAIL) -> dict:
     """Send a single HTML email via SendGrid API."""
     api_key, from_email = _get_credentials()
     if not api_key:
@@ -184,12 +184,12 @@ def build_html_email(owner: str, tracker_issues: list,
 <p>Hi {first_name},</p>
 <p>Please review the following items and provide input for the schedule.</p>
 {"".join(sections)}
-<p class="sig">Best,<br>Laren</p>
+<p class="sig">Best,<br>Scheduling Team</p>
 </body></html>"""
 
 
 def build_and_send_combined_emails(owners_data: dict,
-                                   cc_email: str = LAREN_EMAIL) -> list:
+                                   cc_email: str = SENDER_EMAIL) -> list:
     """One combined HTML email per owner. Returns list of result dicts."""
     results = []
     for owner, data in owners_data.items():
