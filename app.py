@@ -9,7 +9,8 @@ from datetime import datetime
 
 from config import (SENDER_EMAIL, EMAIL_LOOKUP,
                     DEFAULT_BUDGET_THRESHOLD, DEADLINE_WARNING_DAYS)
-from email_utils import build_html_email, send_outlook_email, build_and_send_combined_emails
+from email_utils import (build_html_email, send_email, email_configured,
+                         build_and_send_combined_emails)
 from processors.budget_actual   import process_budget_actual
 from processors.project_tracker import process_project_tracker
 from processors.month_tab       import process_month_tab, build_month_emails
