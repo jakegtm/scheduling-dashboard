@@ -90,8 +90,17 @@ def process_utilization(wb, target_month: str = None) -> list:
     for row in ws.iter_rows(values_only=True):
         # ---- Look for section start ----
         if not in_section:
-            # Any cell in first 5 cols mentions the target month?
-            row_text = " ".join(str(c) for c in row[:6] if c is not None).lower()
+            # Any cell in first 6 cols mentions the target month?
+            # openpyxl returns Excel dates as Python datetime objects,
+            # so we must use strftime — not str() — to get the month name.
+            row_text = ""
+            for c in row[:6]:
+                if c is None:
+                    continue
+                if hasattr(c, "strftime"):          # datetime / date object
+                    row_text += " " + c.strftime("%B %b").lower()
+                else:
+                    row_text += " " + str(c).lower()
             if target_month.lower() in row_text:
                 in_section   = True
                 header_found  = False
