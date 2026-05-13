@@ -67,46 +67,72 @@ def _lookup_email(name: str) -> str | None:
 
 # ============================================================
 # CACHED PROCESSORS
-# Caches key on file_bytes — new upload = new cache key.
+# Each function takes bytes, opens its own workbook internally,
+# and returns only plain dicts/lists — easily serializable.
+# The workbook object is NEVER cached or returned.
 # ============================================================
 
 @st.cache_data(show_spinner=False)
-def _load_wb(file_bytes: bytes):
-    return openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+def _get_sheet_names(file_bytes: bytes) -> list:
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    names = wb.sheetnames
+    wb.close()
+    return names
+
+
+@st.cache_data(show_spinner=False)
+def _get_valid_people(file_bytes: bytes, month: str) -> list:
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    people = []
+    for name in wb.sheetnames:
+        if name.lower().startswith(month[:3].lower()):
+            ws = wb[name]
+            for col in range(7, 45):
+                val = ws.cell(row=2, column=col).value
+                if val:
+                    people.append(str(val).strip())
+            break
+    wb.close()
+    return people
 
 
 @st.cache_data(show_spinner=False)
 def _run_budget(file_bytes: bytes, budget_thresh: float,
                 proj_pct: float, neg_thresh: float) -> list:
-    wb = _load_wb(file_bytes)
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     sheet = _find_sheet(wb.sheetnames, ["budget to actual", "budget"])
-    if not sheet:
-        return []
-    return process_budget_actual(wb[sheet], budget_thresh, proj_pct, neg_thresh)
+    result = []
+    if sheet:
+        result = process_budget_actual(wb[sheet], budget_thresh, proj_pct, neg_thresh)
+    wb.close()
+    return result
 
 
 @st.cache_data(show_spinner=False)
 def _run_tracker(file_bytes: bytes) -> tuple:
-    wb = _load_wb(file_bytes)
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     sheet = _find_sheet(wb.sheetnames, ["project tracker", "tracker"])
-    if not sheet:
-        return [], []
-    return process_project_tracker(wb[sheet])
+    result = ([], [])
+    if sheet:
+        result = process_project_tracker(wb[sheet])
+    wb.close()
+    return result
 
 
 @st.cache_data(show_spinner=False)
-def _run_variance(sched_bytes: bytes, openair_bytes: bytes | None,
+def _run_variance(sched_bytes: bytes, openair_bytes: bytes,
                   month: str, var_min: float, var_max: float) -> tuple:
-    """Returns (variance_issues, has_openair, error_str)"""
+    """Returns (variance_issues: list, has_openair: bool, error: str|None)"""
     if not openair_bytes:
         return [], False, None
 
-    wb = _load_wb(sched_bytes)
+    wb = openpyxl.load_workbook(io.BytesIO(sched_bytes), data_only=True)
     sched_sheet = next(
         (s for s in wb.sheetnames if s.lower().startswith(month[:3].lower())),
         None,
     )
     if not sched_sheet:
+        wb.close()
         return [], False, f"No sheet found for {month}"
 
     try:
@@ -114,30 +140,19 @@ def _run_variance(sched_bytes: bytes, openair_bytes: bytes | None,
         actual_data = parse_openair_report(io.BytesIO(openair_bytes))
         issues      = compute_variances(actual_data, sched_data,
                                         min_diff=var_min, max_diff=var_max)
+        wb.close()
         return issues, True, None
     except Exception as e:
+        wb.close()
         return [], False, str(e)
 
 
 @st.cache_data(show_spinner=False)
 def _run_utilization(file_bytes: bytes, month: str) -> list:
-    wb = _load_wb(file_bytes)
-    return process_utilization(wb, target_month=month)
-
-
-@st.cache_data(show_spinner=False)
-def _get_valid_people(file_bytes: bytes, month: str) -> set:
-    wb = _load_wb(file_bytes)
-    for name in wb.sheetnames:
-        if name.lower().startswith(month[:3].lower()):
-            ws = wb[name]
-            people = set()
-            for col in range(7, 45):
-                val = ws.cell(row=2, column=col).value
-                if val:
-                    people.add(str(val).strip())
-            return people
-    return set()
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    result = process_utilization(wb, target_month=month)
+    wb.close()
+    return result
 
 
 # ============================================================
@@ -209,7 +224,7 @@ if not schedule_file:
 
 # Safely read bytes — order-independent
 try:
-    sched_bytes = schedule_file.read()
+    sched_bytes = bytes(schedule_file.read())
 except Exception as e:
     st.error(f"Could not read schedule file: {e}")
     st.stop()
@@ -217,14 +232,13 @@ except Exception as e:
 openair_bytes = None
 if openair_file:
     try:
-        openair_bytes = openair_file.read()
+        openair_bytes = bytes(openair_file.read())
     except Exception:
         st.warning("Could not read OpenAir file — variance will be skipped.")
 
-# Validate schedule file
+# Quick validation
 try:
-    _wb_check = _load_wb(sched_bytes)
-    sheets    = _wb_check.sheetnames
+    sheets = _get_sheet_names(sched_bytes)
 except Exception as e:
     st.error(f"Could not open schedule file: {e}")
     st.stop()
@@ -239,7 +253,7 @@ c2.info(f"📋 Tracker tab: **{tracker_sheet or 'Not found'}**")
 st.divider()
 
 # ============================================================
-# PROCESS (all cached, each wrapped in try/except)
+# PROCESS (all cached, each in its own try/except)
 # ============================================================
 with st.spinner("Analyzing…"):
 
@@ -254,16 +268,17 @@ with st.spinner("Analyzing…"):
             st.warning(f"Budget to Actual error: {e}")
 
     tracker_issues, tbd_projects = [], []
-    if tracker_sheet:
-        try:
-            tracker_issues, tbd_projects = _run_tracker(sched_bytes)
-        except Exception as e:
-            st.warning(f"Project Tracker error: {e}")
+    try:
+        tracker_issues, tbd_projects = _run_tracker(sched_bytes)
+    except Exception as e:
+        st.warning(f"Project Tracker error: {e}")
 
     variance_issues, has_openair, openair_error = [], False, None
     try:
         variance_issues, has_openair, openair_error = _run_variance(
-            sched_bytes, openair_bytes, active_month,
+            sched_bytes,
+            openair_bytes or b"",   # never pass None to cached fn
+            active_month,
             float(variance_min), float(variance_max),
         )
     except Exception as e:
@@ -276,7 +291,7 @@ with st.spinner("Analyzing…"):
         st.warning(f"Utilization error: {e}")
 
     try:
-        valid_people = _get_valid_people(sched_bytes, active_month)
+        valid_people = set(_get_valid_people(sched_bytes, active_month))
     except Exception:
         valid_people = set()
 
@@ -327,7 +342,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.header("Project Tracker — Known Projects")
     if not tracker_sheet:
-        st.error("No Project Tracker tab found.")
+        st.warning("No Project Tracker tab found in the uploaded file.")
     else:
         c1, c2 = st.columns(2)
         c1.metric("Issues Found",      len(tracker_issues))
@@ -364,7 +379,7 @@ with tab1:
 with tab2:
     st.header("Budget to Actual — Known Projects")
     if not budget_sheet:
-        st.error("No Budget to Actual tab found.")
+        st.warning("No Budget to Actual tab found in the uploaded file.")
     else:
         neg      = [i for i in budget_issues if i.get("type") == "negative"]
         not_proj = [i for i in budget_issues if i.get("type") == "not_projected"]
@@ -393,7 +408,7 @@ with tab2:
 with tab3:
     st.header("Actual vs Schedule Variance")
 
-    if not has_openair:
+    if not has_openair and not openair_error:
         st.info("No OpenAir report uploaded. Upload one above to see actuals.")
     elif openair_error:
         st.error(f"Error parsing OpenAir file: {openair_error}")
@@ -485,7 +500,7 @@ else:
         else:
             st.session_state.selected_people.discard(person)
 
-    selected = st.session_state.selected_people
+    selected       = st.session_state.selected_people
     combined_emails = []
 
     for person in sorted(selected):
