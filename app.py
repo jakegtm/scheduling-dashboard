@@ -232,30 +232,7 @@ with st.spinner("Analyzing…"):
         except Exception as e:
             openair_error = str(e)
     else:
-        # No OpenAir — build variance with actuals = 0 so the tab still renders
-        sched_sheet = next(
-            (s for s in sheets if s.lower().startswith(active_month[:3].lower())),
-            None,
-        )
-        if sched_sheet:
-            sched_data = read_schedule_hours(wb, sched_sheet)
-            # Build placeholder rows with 0 actuals for every scheduled entry
-            for person, projects in sched_data.items():
-                for proj_code, periods in projects.items():
-                    for period, sched_hrs in periods.items():
-                        diff = 0.0 - sched_hrs
-                        if diff <= float(variance_min) or diff >= float(variance_max):
-                            variance_issues.append({
-                                "person":       person,
-                                "first_name":   person,
-                                "project_code": proj_code,
-                                "period":       period,
-                                "actual_hours": 0.0,
-                                "sched_hours":  round(sched_hrs, 1),
-                                "difference":   round(diff, 1),
-                                "question":     "",
-                                "person_email": lookup_email(person),
-                            })
+    variance_issues = []
 
     # Utilization
     util_data = process_utilization(wb, target_month=active_month)
