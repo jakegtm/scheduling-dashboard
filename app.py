@@ -6,26 +6,24 @@ GTM Scheduling Analyzer — Streamlit App
 import io
 import warnings
 from collections import defaultdict
-from datetime import datetime, date
+from datetime import datetime
 
 import openpyxl
 import streamlit as st
 
 from config import (
-    SENDER_EMAIL, SENDER_NAMES,
+    SENDER_EMAIL, SENDER_NAMES, EMAIL_LOOKUP, INTERN_NAMES,
     DEFAULT_BUDGET_THRESHOLD, DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_PROJECTION_THRESHOLD_PCT,
     DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX,
-    EMAIL_LOOKUP, INTERN_NAMES,
 )
 from processors.budget_actual import process_budget_actual
-from processors.project_tracker import process_project_tracker, build_tracker_emails
+from processors.project_tracker import process_project_tracker
 from processors.variance import (
-    parse_openair_report, read_schedule_hours,
-    compute_variances, get_available_months, filter_by_months,
+    parse_openair_report, read_schedule_hours, compute_variances,
 )
 from processors.utilization import process_utilization, build_utilization_emails
-from email_utils import send_emails_batch, EMAIL_OK
+from email_utils import email_configured, send_email, EMAIL_OK, send_emails_batch
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -40,7 +38,7 @@ st.set_page_config(
 # HELPERS
 # ============================================================
 
-def _get_sender_name() -> str:
+def _sender_name() -> str:
     try:
         from_email = st.secrets["email"]["from_email"]
     except (KeyError, FileNotFoundError):
@@ -48,7 +46,14 @@ def _get_sender_name() -> str:
     return SENDER_NAMES.get(from_email, "Jake")
 
 
-def lookup_email(name: str) -> str | None:
+def _find_sheet(sheetnames: list, keywords: list) -> str | None:
+    for name in sheetnames:
+        if any(kw in name.lower() for kw in keywords):
+            return name
+    return None
+
+
+def _lookup_email(name: str) -> str | None:
     if not name:
         return None
     name = name.strip()
@@ -61,37 +66,108 @@ def lookup_email(name: str) -> str | None:
 
 
 # ============================================================
-# SIDEBAR — SETTINGS
+# CACHED PROCESSORS
+# Caches key on file_bytes — new upload = new cache key.
+# ============================================================
+
+@st.cache_data(show_spinner=False)
+def _load_wb(file_bytes: bytes):
+    return openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+
+
+@st.cache_data(show_spinner=False)
+def _run_budget(file_bytes: bytes, budget_thresh: float,
+                proj_pct: float, neg_thresh: float) -> list:
+    wb = _load_wb(file_bytes)
+    sheet = _find_sheet(wb.sheetnames, ["budget to actual", "budget"])
+    if not sheet:
+        return []
+    return process_budget_actual(wb[sheet], budget_thresh, proj_pct, neg_thresh)
+
+
+@st.cache_data(show_spinner=False)
+def _run_tracker(file_bytes: bytes) -> tuple:
+    wb = _load_wb(file_bytes)
+    sheet = _find_sheet(wb.sheetnames, ["project tracker", "tracker"])
+    if not sheet:
+        return [], []
+    return process_project_tracker(wb[sheet])
+
+
+@st.cache_data(show_spinner=False)
+def _run_variance(sched_bytes: bytes, openair_bytes: bytes | None,
+                  month: str, var_min: float, var_max: float) -> tuple:
+    """Returns (variance_issues, has_openair, error_str)"""
+    if not openair_bytes:
+        return [], False, None
+
+    wb = _load_wb(sched_bytes)
+    sched_sheet = next(
+        (s for s in wb.sheetnames if s.lower().startswith(month[:3].lower())),
+        None,
+    )
+    if not sched_sheet:
+        return [], False, f"No sheet found for {month}"
+
+    try:
+        sched_data  = read_schedule_hours(wb, sched_sheet)
+        actual_data = parse_openair_report(io.BytesIO(openair_bytes))
+        issues      = compute_variances(actual_data, sched_data,
+                                        min_diff=var_min, max_diff=var_max)
+        return issues, True, None
+    except Exception as e:
+        return [], False, str(e)
+
+
+@st.cache_data(show_spinner=False)
+def _run_utilization(file_bytes: bytes, month: str) -> list:
+    wb = _load_wb(file_bytes)
+    return process_utilization(wb, target_month=month)
+
+
+@st.cache_data(show_spinner=False)
+def _get_valid_people(file_bytes: bytes, month: str) -> set:
+    wb = _load_wb(file_bytes)
+    for name in wb.sheetnames:
+        if name.lower().startswith(month[:3].lower()):
+            ws = wb[name]
+            people = set()
+            for col in range(7, 45):
+                val = ws.cell(row=2, column=col).value
+                if val:
+                    people.add(str(val).strip())
+            return people
+    return set()
+
+
+# ============================================================
+# SIDEBAR
 # ============================================================
 with st.sidebar:
     st.header("⚙️ Settings")
 
     st.subheader("💰 Budget to Actual")
     budget_threshold = st.number_input(
-        "Flag unscheduled remaining ≥ ($)",
+        "Flag unscheduled remaining >= ($)",
         value=int(DEFAULT_BUDGET_THRESHOLD), step=1000, min_value=0,
-        help="Projects with remaining unscheduled budget at or above this amount will be flagged.",
     )
     negative_threshold = st.number_input(
-        "Flag negative remaining ≤ -($)",
+        "Flag negative remaining <= -($)",
         value=int(DEFAULT_NEGATIVE_THRESHOLD), step=50, min_value=0,
-        help="Flag if remaining is this far negative or worse (e.g. 100 → flags anything ≤ -$100).",
     )
 
     st.divider()
     st.subheader("📊 Variance (Actual vs Schedule)")
-    variance_col1, variance_col2 = st.columns(2)
-    with variance_col1:
+    vc1, vc2 = st.columns(2)
+    with vc1:
         variance_min = st.number_input(
-            "Min (flag if ≤)",
-            value=DEFAULT_VARIANCE_MIN, step=1,
-            help="Flag rows where actual minus schedule is at or below this value.",
+            "Min (flag if <=)",
+            value=float(DEFAULT_VARIANCE_MIN), step=1.0,
         )
-    with variance_col2:
+    with vc2:
         variance_max = st.number_input(
-            "Max (flag if ≥)",
-            value=DEFAULT_VARIANCE_MAX, step=1,
-            help="Flag rows where actual minus schedule is at or above this value.",
+            "Max (flag if >=)",
+            value=float(DEFAULT_VARIANCE_MAX), step=1.0,
         )
 
     st.divider()
@@ -103,17 +179,14 @@ with st.sidebar:
             use_container_width=True, hide_index=True,
         )
 
-
-# ============================================================
-# EMAIL CREDENTIALS CHECK
-# ============================================================
 if not EMAIL_OK:
     st.sidebar.warning(
-        "⚠️ SendGrid keys not found in Streamlit Secrets. "
-        "Add them to enable sending. All previews still work."
+        "SendGrid keys not found in Streamlit Secrets. "
+        "Add them to enable sending. Previews still work."
     )
 
-sender_name = _get_sender_name()
+sender_name  = _sender_name()
+active_month = datetime.now().strftime("%B")
 
 # ============================================================
 # FILE UPLOADS
@@ -122,11 +195,11 @@ st.subheader("📁 Upload Files")
 col_f1, col_f2 = st.columns(2)
 with col_f1:
     schedule_file = st.file_uploader(
-        "Schedule File (.xlsx)", type=["xlsx", "csv"], key="schedule"
+        "Schedule File (.xlsx)", type=["xlsx", "csv"], key="schedule",
     )
 with col_f2:
     openair_file = st.file_uploader(
-        "OpenAir Report (.csv or .xlsx) — optional, enables actuals in Variance tab",
+        "OpenAir Report (.csv or .xlsx) — optional",
         type=["csv", "xlsx"], key="openair",
     )
 
@@ -134,145 +207,109 @@ if not schedule_file:
     st.info("Upload the scheduling file above to begin.")
     st.stop()
 
-# ============================================================
-# LOAD + CACHE
-# ============================================================
-@st.cache_data(show_spinner=False)
-def load_workbook_cached(file_bytes: bytes):
-    return openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+# Safely read bytes — order-independent
+try:
+    sched_bytes = schedule_file.read()
+except Exception as e:
+    st.error(f"Could not read schedule file: {e}")
+    st.stop()
 
+openair_bytes = None
+if openair_file:
+    try:
+        openair_bytes = openair_file.read()
+    except Exception:
+        st.warning("Could not read OpenAir file — variance will be skipped.")
 
-@st.cache_data(show_spinner=False)
-def get_valid_people(file_bytes: bytes) -> set:
-    """Read valid staff names from row 2 of the current month tab."""
-    wb = load_workbook_cached(file_bytes)
-    month_name = datetime.now().strftime("%B")
-    for name in wb.sheetnames:
-        if name.lower().startswith(month_name[:3].lower()):
-            ws = wb[name]
-            people = set()
-            for col in range(7, 40):
-                val = ws.cell(row=2, column=col).value
-                if val:
-                    people.add(str(val).strip())
-            return people
-    return set()
+# Validate schedule file
+try:
+    _wb_check = _load_wb(sched_bytes)
+    sheets    = _wb_check.sheetnames
+except Exception as e:
+    st.error(f"Could not open schedule file: {e}")
+    st.stop()
 
+budget_sheet  = _find_sheet(sheets, ["budget to actual", "budget"])
+tracker_sheet = _find_sheet(sheets, ["project tracker", "tracker"])
 
-file_bytes = schedule_file.read()
-schedule_file.seek(0)
-
-with st.spinner("Loading workbook…"):
-    wb = load_workbook_cached(file_bytes)
-
-sheets = wb.sheetnames
-valid_people = get_valid_people(file_bytes)
-
-def find_sheet(keywords):
-    for name in sheets:
-        if any(kw in name.lower() for kw in keywords):
-            return name
-    return None
-
-budget_sheet_name  = find_sheet(["budget to actual", "budget"])
-tracker_sheet_name = find_sheet(["project tracker", "tracker"])
-
-st.success(f"✅ Loaded **{len(sheets)}** sheet(s)")
+st.success(f"Loaded {len(sheets)} sheet(s)")
 c1, c2 = st.columns(2)
-c1.info(f"💰 Budget tab: **{budget_sheet_name or 'Not found'}**")
-c2.info(f"📋 Tracker tab: **{tracker_sheet_name or 'Not found'}**")
-
+c1.info(f"💰 Budget tab: **{budget_sheet or 'Not found'}**")
+c2.info(f"📋 Tracker tab: **{tracker_sheet or 'Not found'}**")
 st.divider()
 
 # ============================================================
-# PROCESS ALL DATA
+# PROCESS (all cached, each wrapped in try/except)
 # ============================================================
 with st.spinner("Analyzing…"):
 
-    # Budget to Actual
     budget_issues = []
-    if budget_sheet_name:
-        budget_issues = process_budget_actual(
-            wb[budget_sheet_name],
-            float(budget_threshold),
-            DEFAULT_PROJECTION_THRESHOLD_PCT,
-            float(negative_threshold),
-        )
-
-    # Project Tracker
-    tracker_issues, tbd_projects = [], []
-    if tracker_sheet_name:
-        tracker_issues, tbd_projects = process_project_tracker(wb[tracker_sheet_name])
-
-    # OpenAir Variance
-    variance_issues = []
-    has_openair     = False
-    openair_error   = None
-    actual_data     = {}
-    active_month    = datetime.now().strftime("%B")   # e.g. "May"
-
-    if openair_file:
+    if budget_sheet:
         try:
-            actual_data = parse_openair_report(openair_file)
-            if active_month in sheets or any(
-                s.lower().startswith(active_month[:3].lower()) for s in sheets
-            ):
-                sched_sheet = next(
-                    (s for s in sheets if s.lower().startswith(active_month[:3].lower())),
-                    None,
-                )
-                if sched_sheet:
-                    sched_data     = read_schedule_hours(wb, sched_sheet)
-                    variance_issues = compute_variances(
-                        actual_data, sched_data,
-                        min_diff=float(variance_min),
-                        max_diff=float(variance_max),
-                    )
-            has_openair = True
+            budget_issues = _run_budget(
+                sched_bytes, float(budget_threshold),
+                DEFAULT_PROJECTION_THRESHOLD_PCT, float(negative_threshold),
+            )
         except Exception as e:
-            openair_error = str(e)
-    else:
-    variance_issues = []
+            st.warning(f"Budget to Actual error: {e}")
 
-    # Utilization
-    util_data = process_utilization(wb, target_month=active_month)
+    tracker_issues, tbd_projects = [], []
+    if tracker_sheet:
+        try:
+            tracker_issues, tbd_projects = _run_tracker(sched_bytes)
+        except Exception as e:
+            st.warning(f"Project Tracker error: {e}")
 
-    # ---- Build owner-keyed combined data ----
+    variance_issues, has_openair, openair_error = [], False, None
+    try:
+        variance_issues, has_openair, openair_error = _run_variance(
+            sched_bytes, openair_bytes, active_month,
+            float(variance_min), float(variance_max),
+        )
+    except Exception as e:
+        openair_error = str(e)
+
+    util_data = []
+    try:
+        util_data = _run_utilization(sched_bytes, active_month)
+    except Exception as e:
+        st.warning(f"Utilization error: {e}")
+
+    try:
+        valid_people = _get_valid_people(sched_bytes, active_month)
+    except Exception:
+        valid_people = set()
+
+    # Build owner map
     owners_data = defaultdict(lambda: {
         "email": None, "first_name": "there",
         "tracker": [], "budget": [], "variance": [],
     })
 
     for issue in tracker_issues:
-        owner = issue["owner"]
-        if owner not in valid_people:
-            continue
-        if not owners_data[owner]["email"]:
-            owners_data[owner]["email"]      = issue.get("owner_email")
-            owners_data[owner]["first_name"] = issue.get("owner_first", owner)
-        owners_data[owner]["tracker"].append(issue)
+        o = issue.get("owner", "")
+        if not owners_data[o]["email"]:
+            owners_data[o]["email"]      = issue.get("owner_email")
+            owners_data[o]["first_name"] = issue.get("owner_first", o)
+        owners_data[o]["tracker"].append(issue)
 
     for issue in budget_issues:
-        owner = issue["owner"]
-        if owner not in valid_people:
-            continue
-        if not owners_data[owner]["email"]:
-            owners_data[owner]["email"]      = issue.get("owner_email")
-            owners_data[owner]["first_name"] = issue.get("owner_first", owner)
-        owners_data[owner]["budget"].append(issue)
+        o = issue.get("owner", "")
+        if not owners_data[o]["email"]:
+            owners_data[o]["email"]      = issue.get("owner_email")
+            owners_data[o]["first_name"] = issue.get("owner_first", o)
+        owners_data[o]["budget"].append(issue)
 
     for v in variance_issues:
-        person = v["person"]
-        if person not in valid_people:
-            continue
-        if not owners_data[person]["email"]:
-            owners_data[person]["email"] = lookup_email(person)
-        owners_data[person]["variance"].append(v)
+        p = v.get("person", "")
+        if not owners_data[p]["email"]:
+            owners_data[p]["email"] = _lookup_email(p)
+        owners_data[p]["variance"].append(v)
 
     active_owners = {
         owner: data for owner, data in owners_data.items()
         if (data["tracker"] or data["budget"] or data["variance"])
-        and owner in valid_people
+        and (not valid_people or owner in valid_people)
     }
 
 
@@ -286,26 +323,23 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📈 Utilization",
 ])
 
-
-# ============================================================
-# TAB 1 — PROJECT TRACKER
-# ============================================================
+# ---- TAB 1 ----
 with tab1:
     st.header("Project Tracker — Known Projects")
-    if not tracker_sheet_name:
+    if not tracker_sheet:
         st.error("No Project Tracker tab found.")
     else:
         c1, c2 = st.columns(2)
-        c1.metric("⚠️ Issues Found",      len(tracker_issues))
-        c2.metric("📌 TBD / Pending SOW", len(tbd_projects))
+        c1.metric("Issues Found",      len(tracker_issues))
+        c2.metric("TBD / Pending SOW", len(tbd_projects))
 
         if tbd_projects:
-            with st.expander(f"📌 {len(tbd_projects)} TBD / Pending SOW projects"):
+            with st.expander(f"{len(tbd_projects)} TBD / Pending SOW projects"):
                 st.dataframe(
                     [{
                         "Client":       p["client"],
                         "Project Code": p["project_code"],
-                        "Status":       p["status"],
+                        "Status":       p.get("status", "TBD"),
                         "Owner":        p["owner"],
                         "Budget":       f"${p['budget']:,.0f}",
                     } for p in tbd_projects],
@@ -313,7 +347,7 @@ with tab1:
                 )
 
         if not tracker_issues:
-            st.success("✅ No issues found in Known projects!")
+            st.success("No issues found in Known projects!")
         else:
             st.dataframe(
                 [{
@@ -326,24 +360,21 @@ with tab1:
                 use_container_width=True, hide_index=True,
             )
 
-
-# ============================================================
-# TAB 2 — BUDGET TO ACTUAL
-# ============================================================
+# ---- TAB 2 ----
 with tab2:
     st.header("Budget to Actual — Known Projects")
-    if not budget_sheet_name:
+    if not budget_sheet:
         st.error("No Budget to Actual tab found.")
     else:
-        neg      = [i for i in budget_issues if i["type"] == "negative"]
-        not_proj = [i for i in budget_issues if i["type"] == "not_projected"]
+        neg      = [i for i in budget_issues if i.get("type") == "negative"]
+        not_proj = [i for i in budget_issues if i.get("type") == "not_projected"]
         c1, c2, c3 = st.columns(3)
-        c1.metric("🔴 Over Budget",     len(neg))
-        c2.metric("🟡 Under-Scheduled", len(not_proj))
-        c3.metric("⚠️ Total",           len(budget_issues))
+        c1.metric("Over Budget",     len(neg))
+        c2.metric("Under-Scheduled", len(not_proj))
+        c3.metric("Total",           len(budget_issues))
 
         if not budget_issues:
-            st.success("✅ No issues found!")
+            st.success("No issues found!")
         else:
             st.dataframe(
                 [{
@@ -352,32 +383,24 @@ with tab2:
                     "Owner":        i["owner"],
                     "Budget":       f"${i['budget']:,.0f}",
                     "Remaining":    f"${i['remaining']:,.0f}",
-                    "Flag":         i["description"],
+                    "Flag":         i.get("description", ""),
                     "Has Email":    "✅" if i.get("owner_email") else "❌",
                 } for i in budget_issues],
                 use_container_width=True, hide_index=True,
             )
 
-
-# ============================================================
-# TAB 3 — VARIANCE (OpenAir)
-# ============================================================
+# ---- TAB 3 ----
 with tab3:
     st.header("Actual vs Schedule Variance")
 
     if not has_openair:
-        st.info(
-            "No OpenAir report uploaded — actuals are shown as 0. "
-            "Upload an OpenAir file above to populate real actuals."
-        )
+        st.info("No OpenAir report uploaded. Upload one above to see actuals.")
     elif openair_error:
         st.error(f"Error parsing OpenAir file: {openair_error}")
 
     if not variance_issues:
-        st.success(
-            f"✅ No variances outside the range "
-            f"[{variance_min:+.0f}, {variance_max:+.0f}] hours."
-        )
+        if has_openair:
+            st.success(f"No variances outside [{variance_min:+.0f}, {variance_max:+.0f}] hours.")
     else:
         st.metric("Flagged Variances", len(variance_issues))
         st.dataframe(
@@ -393,18 +416,9 @@ with tab3:
             use_container_width=True, hide_index=True,
         )
 
-        no_email = [v for v in variance_issues if not v.get("person_email")]
-        if no_email:
-            missing = sorted(set(v["person"] for v in no_email))
-            st.warning(f"⚠️ No email found for: {', '.join(missing)}")
-
-
-# ============================================================
-# TAB 4 — UTILIZATION
-# ============================================================
+# ---- TAB 4 ----
 with tab4:
     st.header(f"Utilization — {active_month}")
-
     if not util_data:
         st.warning(
             "No utilization data found. Make sure the workbook has a "
@@ -415,11 +429,11 @@ with tab4:
             [{
                 "Role":        u["role"],
                 "Person":      u["person"],
-                "Chargeable":  u.get("chargeable"),
-                "Holiday":     u.get("holiday"),
-                "PTO":         u.get("pto"),
-                "Month Total": u.get("month_total"),
-                "Remaining":   u.get("remaining"),
+                "Chargeable":  u.get("chargeable", "-"),
+                "Holiday":     u.get("holiday", "-"),
+                "PTO":         u.get("pto", "-"),
+                "Month Total": u.get("month_total", "-"),
+                "Remaining":   u.get("remaining", "-"),
                 "Utilization": f"{u['utilization_pct']:.1f}%" if u.get("utilization_pct") is not None else "-",
                 "Goal":        f"{u['goal_pct']:.0f}%"        if u.get("goal_pct")        is not None else "-",
                 "Difference":  f"{u['difference_pct']:+.1f}%" if u.get("difference_pct") is not None else "-",
@@ -428,151 +442,123 @@ with tab4:
             use_container_width=True, hide_index=True,
         )
 
-        no_email = [u for u in util_data if not u.get("person_email")]
-        if no_email:
-            st.warning(
-                f"⚠️ No email found for: "
-                f"{', '.join(u['person'] for u in no_email)}"
-            )
-
 
 # ============================================================
-# COMBINED EMAIL SECTION
+# COMBINED EMAILS
 # ============================================================
 st.divider()
 st.header("📧 Combined Emails")
 st.caption(
-    "One email per person covering: Project Tracker issues, "
-    "Budget to Actual, TBD/Pending SOW projects, Variance, and Utilization."
+    "One email per person: Project Tracker + Budget to Actual + "
+    "TBD/Pending SOW + Variance + Utilization."
 )
 
-# Build utilization emails (one per person)
-util_emails = build_utilization_emails(util_data, month=active_month, sender_name=sender_name)
+util_emails_by_person = {
+    e["person"]: e
+    for e in build_utilization_emails(
+        util_data, month=active_month, sender_name=sender_name
+    )
+}
 
-# Merge all email data by person
-# Start from active_owners (tracker + budget + variance)
-# Then layer in utilization
-all_email_people = set(active_owners.keys()) | {e["person"] for e in util_emails}
+all_people = set(active_owners.keys()) | set(util_emails_by_person.keys())
 
-if not all_email_people:
-    st.info("No flagged items found — no emails to send.")
+if not all_people:
+    st.info("No flagged items — no emails to send.")
 else:
-    # Build person-selector
     if "selected_people" not in st.session_state:
-        st.session_state.selected_people = set(all_email_people)
+        st.session_state.selected_people = set(all_people)
 
-    col_sel1, col_sel2 = st.columns(2)
-    with col_sel1:
+    bc1, bc2 = st.columns(2)
+    with bc1:
         if st.button("Select All"):
-            st.session_state.selected_people = set(all_email_people)
+            st.session_state.selected_people = set(all_people)
             st.rerun()
-    with col_sel2:
+    with bc2:
         if st.button("Deselect All"):
             st.session_state.selected_people = set()
             st.rerun()
 
-    for person in sorted(all_email_people):
+    for person in sorted(all_people):
         checked = person in st.session_state.selected_people
         if st.checkbox(person, value=checked, key=f"chk_{person}"):
             st.session_state.selected_people.add(person)
         else:
             st.session_state.selected_people.discard(person)
 
-    if st.button("✔ Confirm Selection"):
-        st.rerun()
-
     selected = st.session_state.selected_people
-
-    # ---- Build combined emails ----
     combined_emails = []
-    util_by_person  = {e["person"]: e for e in util_emails}
 
     for person in sorted(selected):
-        owner_data   = active_owners.get(person, {})
-        person_email = owner_data.get("email") or lookup_email(person)
-        first_name   = owner_data.get("first_name", person)
+        owner_data    = active_owners.get(person, {})
+        person_email  = owner_data.get("email") or _lookup_email(person)
+        first_name    = owner_data.get("first_name", person)
         if not person_email:
             continue
 
-        is_intern = person in INTERN_NAMES
+        is_intern     = person in INTERN_NAMES
+        tracker_list  = owner_data.get("tracker", [])
+        budget_list   = owner_data.get("budget", [])
+        variance_list = owner_data.get("variance", [])
 
-        sections = []
+        if is_intern:
+            variance_list = [v for v in variance_list if v.get("person") == person]
 
-        # --- Tracker issues ---
-        if owner_data.get("tracker"):
+        owner_tbd = [p for p in tbd_projects if p.get("owner") == person]
+        sections  = []
+
+        if tracker_list:
             lines = [
                 "The following projects assigned to you are missing billing rates. "
                 "Please review and update as soon as possible.\n"
             ]
-            for issue in owner_data["tracker"]:
+            for issue in tracker_list:
                 lines.append(
-                    f"  • {issue['client']} — {issue['project_code']}\n"
+                    f"  - {issue['client']} | {issue['project_code']}\n"
                     f"    Missing: {', '.join(issue.get('missing_rates', []))}"
                 )
             sections.append("\n".join(lines))
 
-        # --- Budget to Actual issues ---
-        if owner_data.get("budget"):
+        if budget_list:
             lines = ["Please review the following budget items:\n"]
-            for issue in owner_data["budget"]:
+            for issue in budget_list:
                 lines.append(
-                    f"  • {issue['client']} — {issue['project_code']}: "
-                    f"${issue['remaining']:,.0f} remaining ({issue['description']})"
+                    f"  - {issue['client']} | {issue['project_code']}: "
+                    f"${issue['remaining']:,.0f} remaining ({issue.get('description', '')})"
                 )
             sections.append("\n".join(lines))
 
-        # --- TBD / Pending SOW for this owner ---
-        owner_tbd = [p for p in tbd_projects if p["owner"] == person]
         if owner_tbd:
             lines = [
-                "The following projects currently have TBD or Pending SOW budgets. "
-                "If you have any updates on these, please reply with the latest — "
-                "otherwise, no action is needed.\n"
+                "The following projects have TBD or Pending SOW budgets. "
+                "If you have any updates, please reply — otherwise no action needed.\n"
             ]
             for proj in owner_tbd:
-                label = f" [{proj['status']}]" if proj["status"] else " [TBD]"
-                lines.append(f"  • {proj['client']} — {proj['project_code']}{label}")
+                label = f" [{proj.get('status', 'TBD')}]"
+                lines.append(f"  - {proj['client']} | {proj['project_code']}{label}")
             sections.append("\n".join(lines))
 
-        # --- Variance ---
-        if owner_data.get("variance"):
-            variances = owner_data["variance"]
-            # Interns only see their own rows; project owners see all with Person column
+        if variance_list:
             if is_intern:
-                rows = [v for v in variances if v["person"] == person]
-                lines = ["Please see below your variance for the current period:\n"]
-                for v in rows:
-                    lines.append(
-                        f"  • {v['project_code']} | {v['period']} | "
-                        f"Actual: {v['actual_hours']}h  Scheduled: {v['sched_hours']}h  "
-                        f"Diff: {v['difference']:+.1f}h"
-                    )
-                    if v.get("question"):
-                        lines.append(f"    → {v['question']}")
+                lines = ["Please see your variance for the current period:\n"]
             else:
-                lines = [
-                    "Please see below the variance summary for projects assigned to you. "
-                    "Review any flagged items and reply with updates as needed.\n"
-                ]
-                for v in variances:
-                    lines.append(
-                        f"  • {v['person']} | {v['project_code']} | {v['period']} | "
-                        f"Actual: {v['actual_hours']}h  Scheduled: {v['sched_hours']}h  "
-                        f"Diff: {v['difference']:+.1f}h"
-                    )
-                    if v.get("question"):
-                        lines.append(f"    → {v['question']}")
+                lines = ["Please see the variance summary for your projects:\n"]
+            for v in variance_list:
+                prefix = "" if is_intern else f"{v.get('person', '')} | "
+                lines.append(
+                    f"  - {prefix}{v['project_code']} | {v['period']} | "
+                    f"Actual: {v['actual_hours']}h  Scheduled: {v['sched_hours']}h  "
+                    f"Diff: {v['difference']:+.1f}h"
+                )
+                if v.get("question"):
+                    lines.append(f"    {v['question']}")
             sections.append("\n".join(lines))
 
-        # --- Utilization ---
-        util_email_data = util_by_person.get(person)
-        if util_email_data:
-            # Extract just the body content (strip greeting/sign-off for embedding)
-            util_body = util_email_data["body"]
-            # Pull the middle section (between greeting and sign-off)
-            lines = util_body.split("\n")
-            util_section = "\n".join(lines[2:-3]).strip()   # skip "Hi X," and "Best, Jake"
-            sections.append(util_section)
+        util_email = util_emails_by_person.get(person)
+        if util_email:
+            body_lines   = util_email["body"].split("\n")
+            util_section = "\n".join(body_lines[2:-3]).strip()
+            if util_section:
+                sections.append(util_section)
 
         if not sections:
             continue
@@ -590,8 +576,8 @@ else:
             "body":    body,
         })
 
-    # ---- Preview + Send ----
-    st.subheader(f"📨 {len(combined_emails)} email(s) ready")
+    st.subheader(f"{len(combined_emails)} email(s) ready")
+
     for email in combined_emails:
         with st.expander(f"To: {email['to']}  |  {email['subject']}"):
             st.text(email["body"])
@@ -601,13 +587,13 @@ else:
             if st.button("📤 Send All Emails", type="primary"):
                 with st.spinner("Sending…"):
                     results = send_emails_batch(combined_emails)
-                sent   = [r for r in results if r["status"] == "sent"]
-                failed = [r for r in results if r["status"] != "sent"]
+                sent   = [r for r in results if r.get("status") == "sent"]
+                failed = [r for r in results if r.get("status") != "sent"]
                 if sent:
-                    st.success(f"✅ {len(sent)} email(s) sent!")
+                    st.success(f"{len(sent)} email(s) sent!")
                 if failed:
-                    st.error("❌ Some emails failed:")
+                    st.error("Some emails failed:")
                     for r in failed:
-                        st.write(f"  • {r['to']}: {r['status']}")
+                        st.write(f"  • {r.get('to', '?')}: {r.get('status', '?')}")
         else:
             st.info("Configure SendGrid keys in Streamlit Secrets to enable sending.")
