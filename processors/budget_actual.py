@@ -2,23 +2,27 @@ from __future__ import annotations
 # ============================================================
 # processors/budget_actual.py
 # ============================================================
-# A(1): Client  B(2): Project Code  C(3): Status (Known only)
-# H(8): Project Owner  I(9): Budget  L(12): Remaining
+# Column layout (verified against real file):
+#   A(1):  Client
+#   B(2):  Project Code
+#   C(3):  Status  <- filter to Known only
+#   H(8):  Project Owner  <- email target
+#   I(9):  Budget Amount
+#   L(12): Remaining  <- flag if negative OR too high
 #
-# Flags:
-#   "negative"      : remaining < -negative_threshold  (default -$100)
-#   "not_projected" : remaining > unscheduled_threshold (default $20k)
+# Rules (Known projects only):
+#   "negative"      : remaining < -neg_thresh
+#   "not_projected" : remaining > budget_thresh
 # ============================================================
 
-from collections import defaultdict
-from processors.lookup import lookup_email, lookup_first_name
+from config import EMAIL_LOOKUP, FIRST_NAMES
 
-COL_CLIENT    = 1
-COL_CODE      = 2
-COL_STATUS    = 3
-COL_OWNER     = 8
-COL_BUDGET    = 9
-COL_REMAINING = 12
+COL_CLIENT    = 1   # A
+COL_CODE      = 2   # B
+COL_STATUS    = 3   # C
+COL_OWNER     = 8   # H
+COL_BUDGET    = 9   # I
+COL_REMAINING = 12  # L
 
 
 def _to_float(val):
@@ -28,73 +32,97 @@ def _to_float(val):
         return None
 
 
-def process_budget_actual(ws,
-                          unscheduled_threshold: float = 20000,
-                          negative_threshold: float = 100) -> list:
+def _lookup_email(name: str) -> str | None:
+    if not name:
+        return None
+    name = str(name).strip()
+    if name in EMAIL_LOOKUP:
+        return EMAIL_LOOKUP[name]
+    for key, email in EMAIL_LOOKUP.items():
+        if key.lower() == name.lower():
+            return email
+    return None
+
+
+def _lookup_first(name: str) -> str:
+    if not name:
+        return "there"
+    name = str(name).strip()
+    if name in FIRST_NAMES:
+        return FIRST_NAMES[name]
+    for key, first in FIRST_NAMES.items():
+        if key.lower() == name.lower():
+            return first
+    return name.split()[0] if name else "there"
+
+
+def process_budget_actual(
+    ws,
+    budget_thresh: float = 20000,
+    proj_pct: float = 0.80,
+    neg_thresh: float = 100,
+) -> list:
     """
-    negative_threshold: flag if remaining < -negative_threshold
-                        (positive number, e.g. 100 → flags anything below -$100)
+    Scan the Budget to Actual sheet and return flagged issues.
+
+    Each issue dict contains:
+        client, project_code, owner, owner_email, owner_first,
+        budget, remaining, type ("negative" | "not_projected"),
+        description
     """
     issues = []
-    consecutive_blank = 0
 
-    for row in ws.iter_rows(min_row=3, max_row=5000, values_only=True):
+    for row in ws.iter_rows(min_row=2, values_only=True):
         row = list(row) + [None] * 20
 
-        project_code = row[COL_CODE - 1]
-        if not project_code or str(project_code).strip() == "":
-            consecutive_blank += 1
-            if consecutive_blank >= 10:
-                break
-            continue
-        consecutive_blank = 0
-
-        status = str(row[COL_STATUS - 1]).strip() if row[COL_STATUS - 1] else ""
-        if status.lower() != "known":
-            continue
-
         client    = row[COL_CLIENT - 1]
-        owner     = str(row[COL_OWNER - 1]).strip() if row[COL_OWNER - 1] else ""
-        budget    = _to_float(row[COL_BUDGET - 1]) or 0.0
+        code      = row[COL_CODE - 1]
+        status    = row[COL_STATUS - 1]
+        owner     = row[COL_OWNER - 1]
+        budget    = _to_float(row[COL_BUDGET - 1])
         remaining = _to_float(row[COL_REMAINING - 1])
 
-        if remaining is None:
+        # Skip blank rows
+        if not client and not code:
             continue
 
-        base = dict(
-            client=client,
-            project_code=str(project_code).strip(),
-            owner=owner,
-            owner_email=lookup_email(owner),
-            owner_first=lookup_first_name(owner),
-            budget=budget,
-            remaining=remaining,
-        )
+        status_str = str(status).strip().lower() if status else ""
 
-        if remaining < -negative_threshold:
-            issues.append({**base,
-                "type": "negative",
-                "description": f"Over budget by ${abs(remaining):,.0f}",
+        # Only process Known projects
+        if status_str != "known":
+            continue
+
+        if budget is None or remaining is None:
+            continue
+
+        owner_str = str(owner).strip() if owner else ""
+
+        # Flag over-budget (remaining is very negative)
+        if remaining < -neg_thresh:
+            issues.append({
+                "client":       client,
+                "project_code": str(code).strip() if code else "",
+                "owner":        owner_str,
+                "owner_email":  _lookup_email(owner_str),
+                "owner_first":  _lookup_first(owner_str),
+                "budget":       budget,
+                "remaining":    remaining,
+                "type":         "negative",
+                "description":  f"Over budget by ${abs(remaining):,.0f}",
             })
-        elif remaining > unscheduled_threshold:
-            issues.append({**base,
-                "type": "not_projected",
-                "description": f"${remaining:,.0f} unscheduled",
+
+        # Flag under-scheduled (remaining is large relative to budget)
+        elif budget > 0 and remaining >= budget_thresh:
+            issues.append({
+                "client":       client,
+                "project_code": str(code).strip() if code else "",
+                "owner":        owner_str,
+                "owner_email":  _lookup_email(owner_str),
+                "owner_first":  _lookup_first(owner_str),
+                "budget":       budget,
+                "remaining":    remaining,
+                "type":         "not_projected",
+                "description":  f"${remaining:,.0f} unscheduled remaining",
             })
 
     return issues
-
-
-def build_budget_emails(issues: list, cc_email: str) -> list:
-    grouped = defaultdict(list)
-    for issue in issues:
-        grouped[issue["owner"]].append(issue)
-    emails = []
-    for owner, owner_issues in grouped.items():
-        owner_email = owner_issues[0].get("owner_email")
-        if not owner_email:
-            continue
-        emails.append({
-            "to": owner_email, "owner": owner, "issues": owner_issues,
-        })
-    return emails
