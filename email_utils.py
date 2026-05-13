@@ -233,3 +233,9 @@ def build_and_send_combined_emails(owners_data: dict,
         results.append(result)
 
     return results
+
+# Aliases expected by app.py
+EMAIL_OK = email_configured()
+
+def send_emails_batch(emails: list) -> list:
+    return [send_email(e["to"], e["subject"], e["body"]) for e in emails]
