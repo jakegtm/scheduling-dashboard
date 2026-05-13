@@ -73,103 +73,106 @@ def parse_openair_report(file_obj) -> dict:
     """
     Parse an OpenAir time report CSV.
 
-    Expected hierarchical structure:
-        Person row   — e.g. "Hendrickson, Jake" in col A
-        Project row  — e.g. "  Accelleron '26 Tax..."  (indented)
-        Week row     — date + hours per week column
+    Actual flat CSV format:
+        Row 1: Title row (skipped)
+        Row 2: Headers — "Project - Name", "Date", "Employee", "Time (Hours)"
+        Row 3+: Data — one entry per row
+
+    Employee format: "LastName, FirstName"  (last name used as key)
+    Date format:     MM/DD/YYYY
 
     Returns:
         {
-            "Hendrickson": {
-                "Accelleron '26 Tax Department Management": {
-                    "May 1-15":  8.0,
-                    "May 16-31": 16.0,
+            "Wojtowicz": {
+                "Braze '25 OTP Implementation": {
+                    "January 1-15":  8.0,
+                    "January 16-31": 16.0,
                 },
             },
         }
     """
-    import csv, io
+    import csv, io as _io
+    from datetime import datetime as _dt
 
     if hasattr(file_obj, "read"):
         content = file_obj.read()
         if isinstance(content, bytes):
-            content = content.decode("utf-8", errors="replace")
-        file_obj = io.StringIO(content)
+            content = content.decode("utf-8-sig", errors="replace")  # utf-8-sig strips BOM
+        file_obj = _io.StringIO(content)
 
-    reader = list(csv.reader(file_obj))
+    reader  = list(csv.reader(file_obj))
+    result  = {}
 
-    result       = {}
-    current_person  = None
-    current_project = None
-
-    MONTH_ABBREVS = {
-        "jan": "January", "feb": "February", "mar": "March",
-        "apr": "April",   "may": "May",      "jun": "June",
-        "jul": "July",    "aug": "August",   "sep": "September",
-        "oct": "October", "nov": "November", "dec": "December",
-    }
-
-    def _parse_date(s):
+    def _parse_date(s: str):
         s = s.strip()
         for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
             try:
-                return date(*[int(x) for x in
-                               __import__("datetime").datetime.strptime(s, fmt).timetuple()[:3]])
-            except (ValueError, AttributeError):
+                return _dt.strptime(s, fmt).date()
+            except ValueError:
                 pass
         return None
 
-    def _week_to_period(d: date) -> str:
+    def _date_to_period(d) -> str:
         month_name = d.strftime("%B")
         if d.day <= 15:
             return f"{month_name} 1-15"
-        else:
-            last_day = (d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
-            return f"{month_name} 16-{last_day.day}"
+        last_day = (d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        return f"{month_name} 16-{last_day.day}"
 
-    for row in reader:
-        if not row or not any(row):
-            continue
-        first_cell = str(row[0]).strip()
+    # Find the header row (contains "Date" and "Employee")
+    header_idx = None
+    col_project = col_date = col_employee = col_hours = None
 
-        # Blank first cell with data further right → skip header/total rows
-        if not first_cell:
-            continue
+    for i, row in enumerate(reader):
+        row_lower = [str(c).strip().lower() for c in row]
+        if "date" in row_lower and "employee" in row_lower:
+            header_idx  = i
+            # Map columns by header name
+            for j, h in enumerate(row_lower):
+                if "project" in h:      col_project  = j
+                elif h == "date":       col_date     = j
+                elif "employee" in h:   col_employee = j
+                elif "hour" in h:       col_hours    = j
+            break
 
-        # Detect person row: "LastName, FirstName" with a comma, not indented
-        if "," in first_cell and not first_cell.startswith(" "):
-            parts = first_cell.split(",")
-            last_name = parts[0].strip()
-            current_person  = last_name
-            current_project = None
-            if current_person not in result:
-                result[current_person] = {}
-            continue
+    if header_idx is None or col_employee is None:
+        return result  # unrecognised format
 
-        # Detect project row: starts with whitespace, followed by project name
-        if first_cell.startswith(" ") or (row[0] != first_cell):
-            project_name = first_cell.strip()
-            if current_person and project_name and not re.match(r"^\d{1,2}[/\-]", project_name):
-                current_project = project_name
-                if current_project not in result.get(current_person, {}):
-                    result.setdefault(current_person, {})[current_project] = {}
+    # Parse data rows
+    for row in reader[header_idx + 1:]:
+        if len(row) <= max(filter(None.__ne__, [col_project, col_date, col_employee, col_hours])):
             continue
 
-        # Detect week row: first cell is a date
-        d = _parse_date(first_cell)
-        if d and current_person and current_project:
-            period = _week_to_period(d)
-            # Sum all numeric values in the row (hours columns)
-            total = 0.0
-            for cell in row[1:]:
-                try:
-                    total += float(str(cell).replace(",", "").strip())
-                except (ValueError, TypeError):
-                    pass
-            if total > 0:
-                result[current_person][current_project][period] = (
-                    result[current_person][current_project].get(period, 0.0) + total
-                )
+        project_name  = str(row[col_project]).strip()  if col_project  is not None else ""
+        date_str      = str(row[col_date]).strip()     if col_date     is not None else ""
+        employee_str  = str(row[col_employee]).strip() if col_employee is not None else ""
+        hours_str     = str(row[col_hours]).strip()    if col_hours    is not None else ""
+
+        if not employee_str or not date_str or not project_name:
+            continue
+
+        # Parse hours
+        try:
+            hours = float(hours_str.replace(",", ""))
+        except ValueError:
+            continue
+        if hours <= 0:
+            continue
+
+        # Last name from "LastName, FirstName"
+        last_name = employee_str.split(",")[0].strip() if "," in employee_str else employee_str
+
+        # Parse date → period label
+        d = _parse_date(date_str)
+        if d is None:
+            continue
+        period = _date_to_period(d)
+
+        # Accumulate
+        result.setdefault(last_name, {}).setdefault(project_name, {})
+        result[last_name][project_name][period] = (
+            result[last_name][project_name].get(period, 0.0) + hours
+        )
 
     return result
 
