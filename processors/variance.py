@@ -174,13 +174,45 @@ def parse_openair_report(file_obj) -> dict:
     return result
 
 
-def get_available_months(actual_data: dict) -> list:
-    """Return sorted list of unique period labels found in actual_data."""
-    periods = set()
+def get_available_months(actual_data: dict) -> tuple:
+    """
+    Return (all_periods_sorted, future_periods) where future_periods
+    are period labels whose start date is after today.
+    Period labels are expected in "Month D1-D2" format, e.g. "May 1-15".
+    """
+    import calendar
+    from datetime import date
+
+    periods: set = set()
     for projects in actual_data.values():
         for periods_dict in projects.values():
             periods.update(periods_dict.keys())
-    return sorted(periods)
+
+    today          = date.today()
+    sorted_periods = sorted(periods)
+    future_periods = []
+
+    for period in sorted_periods:
+        m = re.match(r"(\w+)\s+(\d+)\s*[-\u2013]\s*(\d+)", str(period))
+        if not m:
+            continue
+        month_str, start_day = m.group(1), int(m.group(2))
+        # Match month name (full or 3-letter abbreviation)
+        month_num = 0
+        for i, name in enumerate(calendar.month_name):
+            if name.lower().startswith(month_str.lower()[:3]):
+                month_num = i
+                break
+        if month_num == 0:
+            continue
+        try:
+            period_start = date(today.year, month_num, start_day)
+            if period_start > today:
+                future_periods.append(period)
+        except ValueError:
+            pass
+
+    return sorted_periods, future_periods
 
 
 def filter_by_months(actual_data: dict, selected_periods: list) -> dict:
