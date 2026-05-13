@@ -72,14 +72,7 @@ def _md5(b: bytes) -> str:
 
 
 # ============================================================
-# SINGLE CACHED PROCESSOR
-#
-# Performance fixes applied:
-# 1. hash_funcs uses MD5 instead of Streamlit's slow default hasher —
-#    cuts per-interaction overhead from several seconds to ~1ms.
-# 2. max_entries=2 caps how much memory the cache holds.
-# 3. gc.collect() after workbook close frees memory immediately.
-# 4. Workbook is opened once, all processors run inside the same call.
+# CACHED PROCESSOR
 # ============================================================
 
 @st.cache_data(
@@ -112,12 +105,9 @@ def _run_all(
         load_error=None,
     )
 
-    # ── Open workbook ────────────────────────────────────────
     wb = None
     try:
-        wb = openpyxl.load_workbook(
-            io.BytesIO(sched_bytes), data_only=True
-        )
+        wb = openpyxl.load_workbook(io.BytesIO(sched_bytes), data_only=True)
         out["sheets"] = list(wb.sheetnames)
 
         budget_sheet  = _find_sheet(out["sheets"], ["budget to actual", "budget"])
@@ -125,7 +115,6 @@ def _run_all(
         out["budget_sheet"]  = budget_sheet
         out["tracker_sheet"] = tracker_sheet
 
-        # ── Budget to Actual ─────────────────────────────────
         if budget_sheet:
             try:
                 out["budget_issues"] = process_budget_actual(
@@ -134,7 +123,6 @@ def _run_all(
             except Exception:
                 pass
 
-        # ── Project Tracker ──────────────────────────────────
         if tracker_sheet:
             try:
                 out["tracker_issues"], out["tbd_projects"] = process_project_tracker(
@@ -143,13 +131,11 @@ def _run_all(
             except Exception:
                 pass
 
-        # ── Utilization ──────────────────────────────────────
         try:
             out["util_data"] = process_utilization(wb, target_month=active_month)
         except Exception:
             pass
 
-        # ── Valid people ─────────────────────────────────────
         try:
             month_prefix = active_month[:3].lower()
             for name in wb.sheetnames:
@@ -176,13 +162,10 @@ def _run_all(
                 pass
         gc.collect()
 
-    # ── Variance (OpenAir) ───────────────────────────────────
     if openair_bytes:
         wb2 = None
         try:
-            wb2 = openpyxl.load_workbook(
-                io.BytesIO(sched_bytes), data_only=True
-            )
+            wb2 = openpyxl.load_workbook(io.BytesIO(sched_bytes), data_only=True)
             month_prefix = active_month[:3].lower()
             sched_sheet  = next(
                 (s for s in wb2.sheetnames if s.lower().startswith(month_prefix)),
@@ -213,7 +196,17 @@ def _run_all(
 
 
 # ============================================================
-# SESSION STATE — initialize before anything else
+# SESSION STATE
+# Must be initialized before sidebar renders.
+#
+# TWO separate state groups:
+#   "applied_settings" — what _run_all actually uses
+#   "draft_*" keys     — what the sidebar inputs show
+#
+# The draft keys are owned by the number_input widgets via key=.
+# They only get copied into applied_settings when the user clicks
+# "✔ Apply Settings". This means clicking +/- never triggers a
+# re-process — it just updates the draft in session state.
 # ============================================================
 if "applied_settings" not in st.session_state:
     st.session_state.applied_settings = {
@@ -222,6 +215,17 @@ if "applied_settings" not in st.session_state:
         "variance_min":       float(DEFAULT_VARIANCE_MIN),
         "variance_max":       float(DEFAULT_VARIANCE_MAX),
     }
+
+# Draft keys: only initialized once — after that, the widget
+# owns the value via key= and it persists across reruns.
+if "draft_budget" not in st.session_state:
+    st.session_state.draft_budget = int(DEFAULT_BUDGET_THRESHOLD)
+if "draft_negative" not in st.session_state:
+    st.session_state.draft_negative = int(DEFAULT_NEGATIVE_THRESHOLD)
+if "draft_var_min" not in st.session_state:
+    st.session_state.draft_var_min = float(DEFAULT_VARIANCE_MIN)
+if "draft_var_max" not in st.session_state:
+    st.session_state.draft_var_max = float(DEFAULT_VARIANCE_MAX)
 
 if "selected_people" not in st.session_state:
     st.session_state.selected_people = set()
@@ -234,39 +238,56 @@ with st.sidebar:
     st.header("⚙️ Settings")
 
     st.subheader("💰 Budget to Actual")
-    draft_budget = st.number_input(
+
+    # Using key= means Streamlit stores the value in
+    # st.session_state.draft_budget automatically.
+    # No value= here — so it never resets on rerun.
+    st.number_input(
         "Flag unscheduled remaining >= ($)",
-        value=int(st.session_state.applied_settings["budget_threshold"]),
-        step=1000, min_value=0,
+        key="draft_budget",
+        step=1000,
+        min_value=0,
     )
-    draft_negative = st.number_input(
+    st.number_input(
         "Flag negative remaining <= -($)",
-        value=int(st.session_state.applied_settings["negative_threshold"]),
-        step=50, min_value=0,
+        key="draft_negative",
+        step=50,
+        min_value=0,
     )
 
     st.divider()
     st.subheader("📊 Variance (Actual vs Schedule)")
     vc1, vc2 = st.columns(2)
     with vc1:
-        draft_var_min = st.number_input(
+        st.number_input(
             "Min (flag if <=)",
-            value=float(st.session_state.applied_settings["variance_min"]),
+            key="draft_var_min",
             step=1.0,
         )
     with vc2:
-        draft_var_max = st.number_input(
+        st.number_input(
             "Max (flag if >=)",
-            value=float(st.session_state.applied_settings["variance_max"]),
+            key="draft_var_max",
             step=1.0,
         )
 
+    # Highlight if drafts differ from applied (so user knows to click Apply)
+    drafts_differ = (
+        float(st.session_state.draft_budget)   != st.session_state.applied_settings["budget_threshold"]
+        or float(st.session_state.draft_negative) != st.session_state.applied_settings["negative_threshold"]
+        or float(st.session_state.draft_var_min)  != st.session_state.applied_settings["variance_min"]
+        or float(st.session_state.draft_var_max)  != st.session_state.applied_settings["variance_max"]
+    )
+
+    if drafts_differ:
+        st.warning("⚠️ Settings changed — click Apply to update results.")
+
     if st.button("✔ Apply Settings", type="primary", use_container_width=True):
         st.session_state.applied_settings = {
-            "budget_threshold":   float(draft_budget),
-            "negative_threshold": float(draft_negative),
-            "variance_min":       float(draft_var_min),
-            "variance_max":       float(draft_var_max),
+            "budget_threshold":   float(st.session_state.draft_budget),
+            "negative_threshold": float(st.session_state.draft_negative),
+            "variance_min":       float(st.session_state.draft_var_min),
+            "variance_max":       float(st.session_state.draft_var_max),
         }
         st.rerun()
 
@@ -282,6 +303,7 @@ with st.sidebar:
 if not EMAIL_OK:
     st.sidebar.warning("SendGrid keys not found in Streamlit Secrets. Previews still work.")
 
+# Only these values drive processing — never the raw draft inputs
 budget_threshold   = st.session_state.applied_settings["budget_threshold"]
 negative_threshold = st.session_state.applied_settings["negative_threshold"]
 variance_min       = st.session_state.applied_settings["variance_min"]
