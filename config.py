@@ -86,7 +86,6 @@ OPENAIR_EMPLOYEE_MAP = {
 # --- FIRST NAMES (for email greetings) ---
 # Keys match exactly how names appear in the file (last name / "S. O'Donnell" style)
 FIRST_NAMES = {
-    "O'Donnell":    "Jake",
     "J. O'Donnell": "Jake",
     "S. O'Donnell": "Scott",
     "Sorrentino":   "Anthony",
@@ -114,7 +113,6 @@ FIRST_NAMES = {
 #   - Utilization tab   person name column
 # ============================================================
 EMAIL_LOOKUP = {
-    "O'Donnell":    "jodonnell@gtmtax.com",
     "J. O'Donnell": "jodonnell@gtmtax.com",
     "S. O'Donnell": "sodonnell@gtmtax.com",
     "Sorrentino":   "asorrentino@gtmtax.com",
