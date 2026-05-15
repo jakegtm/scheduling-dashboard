@@ -159,15 +159,15 @@ def get_valid_people(file_hash, _b, active_month):
             return people
     return set()
 
-@st.cache_data(show_spinner=False)
 def get_oa_periods(oa_hash, _oa_bytes):
-    """Return (available, future) period lists from OpenAir data."""
+    """Return (available, future) period lists from OpenAir data.
+    Not cached — period logic is fast; underlying parse IS cached in _parse_openair."""
     actual = _parse_openair(oa_hash, _oa_bytes)
     return get_available_months(actual)
 
-@st.cache_data(show_spinner=False)
 def get_sched_periods(file_hash, _b, active_month):
-    """Return (available, future) period lists from the schedule sheet."""
+    """Return (available, future) period lists from the schedule sheet.
+    Not cached — period logic is fast; underlying workbook IS cached in _load_wb."""
     wb = _load_wb(file_hash, _b)
     sheet = next(
         (s for s in wb.sheetnames if s.lower().startswith(active_month[:3].lower())),
