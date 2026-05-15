@@ -72,14 +72,23 @@ if _os.path.exists(_logo_path):
     except Exception:
         pass
 
+# Header with logo embedded via HTML to prevent column clipping
+_logo_b64 = ""
 if _os.path.exists(_logo_path):
-    _hc1, _hc2 = st.columns([0.12, 0.88])
-    with _hc1:
-        st.image(_logo_path, width=70)
-    with _hc2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("## GTM Scheduling Analyzer")
-        st.caption(f"Today: {datetime.now().strftime('%A, %B %d, %Y')}")
+    import base64 as _b64
+    with open(_logo_path, "rb") as _f:
+        _logo_b64 = _b64.b64encode(_f.read()).decode()
+
+if _logo_b64:
+    st.markdown(
+        f'''<div style="display:flex;align-items:center;gap:16px;margin-bottom:4px;">
+        <img src="data:image/png;base64,{_logo_b64}"
+             style="height:72px;width:auto;object-fit:contain;flex-shrink:0;">
+        <div>
+          <div style="font-size:1.8rem;font-weight:700;color:#0E2841;line-height:1.2;">GTM Scheduling Analyzer</div>
+          <div style=\"font-size:0.85rem;color:#64748b;\">Today: {datetime.now().strftime('%A, %B %d, %Y')}</div>
+        </div></div>''',
+        unsafe_allow_html=True)
 else:
     st.markdown("## GTM Scheduling Analyzer")
     st.caption(f"Today: {datetime.now().strftime('%A, %B %d, %Y')}")
