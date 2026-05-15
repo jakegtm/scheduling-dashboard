@@ -302,18 +302,20 @@ with st.sidebar:
         st.subheader("📊 Variance Thresholds")
         st.markdown("**📉 Scheduled but not actual**")
         st.caption("Flag when scheduled hrs exceed actual hrs by more than:")
-        f_var_min = st.slider(
-            "", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
-            value=float(st.session_state.settings["variance_min"]),
-            label_visibility="collapsed",
-        )
+        _cur_min = float(st.session_state.settings["variance_min"])
+        st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
+                  value=min(_cur_min, 50.0), label_visibility="collapsed",
+                  key="_form_sl_min")
+        f_var_min = st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
+                                    value=_cur_min)
         st.markdown("**📈 Actual but not scheduled**")
         st.caption("Flag when actual hrs exceed scheduled hrs by more than:")
-        f_var_max = st.slider(
-            "", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
-            value=float(st.session_state.settings["variance_max"]),
-            label_visibility="collapsed",
-        )
+        _cur_max = float(st.session_state.settings["variance_max"])
+        st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
+                  value=min(_cur_max, 50.0), label_visibility="collapsed",
+                  key="_form_sl_max")
+        f_var_max = st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
+                                    value=_cur_max)
         applied = st.form_submit_button(
             "✔ Apply Settings", type="primary", use_container_width=True)
 
