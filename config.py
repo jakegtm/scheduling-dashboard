@@ -25,6 +25,10 @@ DEFAULT_VARIANCE_MAX = 0    # Flag if difference >= this (actual > schedule)
 # Add more names here as needed (e.g. when more analysts are hired).
 INTERN_NAMES = {"Avington"}
 
+# Project code prefixes to exclude from variance analysis.
+# GTM internal/non-chargeable codes (NONCHG, TRAINING, HOLIDAYS, etc.) should not appear.
+VARIANCE_EXCLUDE_PREFIXES = {"GTM"}
+
 # --- PURPLE FILL DETECTION (Month tab "done" cells) ---
 PURPLE_HEX_CODES = {
     "A02B93",   # Confirmed accent5 from this workbook's theme
