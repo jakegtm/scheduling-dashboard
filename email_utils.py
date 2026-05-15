@@ -37,7 +37,6 @@ def send_email(to_email: str, subject: str, body: str,
     if not api_key:
         return {"status": "error: SendGrid credentials not configured", "to": to_email}
 
-    # Accept plain text or HTML
     content_type = "text/html" if body.strip().startswith("<") else "text/plain"
 
     personalization = {"to": [{"email": to_email}]}
@@ -78,6 +77,8 @@ _CSS = """
   p    { margin: 4px 0 10px 0; }
   .notice { background:#fff3cd; border-left:4px solid #e6a817;
             padding:8px 12px; margin:10px 0; font-size:13px; border-radius:3px; }
+  .info   { background:#e8f4fd; border-left:4px solid #2980b9;
+            padding:8px 12px; margin:10px 0; font-size:13px; border-radius:3px; }
   table { border-collapse: collapse; width: 100%; margin-bottom: 18px; font-size: 13px; }
   th    { background-color: #0E2841; color: #fff; padding: 8px 12px;
           text-align: left; font-weight: 600; }
@@ -105,34 +106,50 @@ def _table(headers: list, rows: list, response_col: bool = True) -> str:
     return html
 
 
-def build_html_email(owner: str,
-                     first_name: str,
-                     tracker_issues: list,
-                     budget_issues: list,
-                     month_issues: list,
-                     variance_issues: list,
-                     has_openair: bool = False,
-                     selected_months: list = None) -> str:
+def build_html_email(
+    owner: str,
+    first_name: str,
+    tracker_issues: list,
+    budget_issues: list,
+    tbd_projects: list,
+    variance_issues: list,
+    util_data: list        = None,
+    has_openair: bool      = False,
+    no_openair_note: bool  = False,
+    selected_months: list  = None,
+) -> str:
     """Build one combined HTML email for an owner."""
     sender_name = _get_sender_name()
     sections    = []
 
-    month_notice = ""
+    # Multi-period notice
     if selected_months and len(selected_months) > 1:
         month_list = ", ".join(selected_months)
-        month_notice = (f'<div class="notice">⚠️ <strong>Note:</strong> This report '
-                        f'covers multiple periods: <strong>{month_list}</strong>.</div>')
-
-    if tracker_issues:
-        rows = [[i["project_code"], prob]
-                for i in tracker_issues for prob in i.get("problems", i.get("missing_rates", []))]
         sections.append(
-            "<h3>Project Tracker</h3>"
-            "<p>The below projects have missing rates and/or budget. "
-            "Please review and update.</p>"
-            + _table(["Project Code", "To be reviewed"], rows)
+            f'<div class="notice">⚠️ <strong>Note:</strong> This report covers '
+            f'multiple periods: <strong>{month_list}</strong>.</div>'
         )
 
+    # ── Project Tracker ──────────────────────────────────────
+    if tracker_issues:
+        rows = []
+        for i in tracker_issues:
+            missing = i.get("missing_rates", [])
+            for m in missing:
+                rows.append([i["project_code"], f"Missing {m} Rate"])
+            # If missing_rates is empty but problems exists
+            if not missing:
+                for prob in i.get("problems", []):
+                    rows.append([i["project_code"], prob])
+        if rows:
+            sections.append(
+                "<h3>Project Tracker</h3>"
+                "<p>The below projects have missing rates and/or budget. "
+                "Please review and update.</p>"
+                + _table(["Project Code", "To be reviewed"], rows)
+            )
+
+    # ── Budget to Actual ─────────────────────────────────────
     if budget_issues:
         rows = []
         for i in budget_issues:
@@ -146,24 +163,35 @@ def build_html_email(owner: str,
             + _table(["Project Code", "To be reviewed"], rows)
         )
 
-    if month_issues:
-        rows = [[str(i.get("project_code", "")), str(i.get("period", "")), str(i.get("hours", ""))]
-                for i in month_issues]
+    # ── TBD / Pending SOW ────────────────────────────────────
+    owner_tbd = [p for p in (tbd_projects or []) if p.get("owner") == owner]
+    if owner_tbd:
+        rows = [[p.get("project_code", ""), p.get("status", "TBD")]
+                for p in owner_tbd]
         sections.append(
-            "<h3>Scheduled Hours — Action Required</h3>"
-            "<p>The following hours are scheduled but have not yet been confirmed.</p>"
-            + _table(["Project Code", "Period", "Scheduled Hours"], rows)
+            "<h3>TBD / Pending SOW Projects</h3>"
+            "<p>The following projects have TBD or Pending SOW budgets. "
+            "If you have any updates, please reply — otherwise no action needed.</p>"
+            + _table(["Project Code", "Status"], rows, response_col=True)
         )
 
-    if has_openair and variance_issues:
+    # ── Variance ─────────────────────────────────────────────
+    if variance_issues:
+        if no_openair_note:
+            sections.append(
+                '<div class="info">ℹ️ <strong>Note:</strong> No OpenAir report was uploaded, '
+                'so actual hours are shown as 0. Schedule hours reflect what is planned.</div>'
+            )
         rows = []
         for v in variance_issues:
             diff     = v.get("difference", 0)
             css      = "over" if diff < 0 else "neg"
             diff_fmt = f'<span class="{css}">{diff:+.1f}</span>'
-            rows.append([v.get("project_code", ""), v.get("period", ""),
-                         str(v.get("actual_hours", "")), str(v.get("sched_hours", "")),
-                         diff_fmt, v.get("question", "")])
+            rows.append([
+                v.get("project_code", ""), v.get("period", ""),
+                str(v.get("actual_hours", "")), str(v.get("sched_hours", "")),
+                diff_fmt, v.get("question", ""),
+            ])
         sections.append(
             "<h3>Actual vs Schedule Variances</h3>"
             "<p>Please review the below variances and provide updates as needed.</p>"
@@ -171,38 +199,57 @@ def build_html_email(owner: str,
                        "Scheduled Hrs", "Difference", "To be reviewed"], rows)
         )
 
+    # ── Utilization ──────────────────────────────────────────
+    if util_data:
+        person_util = [u for u in util_data if u.get("person") == owner]
+        if person_util:
+            u = person_util[0]
+            util_pct = u.get("utilization_pct")
+            goal_pct = u.get("goal_pct")
+            diff_pct = u.get("difference_pct")
+            util_str = f"{util_pct:.1f}%" if util_pct is not None else "-"
+            goal_str = f"{goal_pct:.0f}%" if goal_pct is not None else "-"
+            if diff_pct is not None:
+                css      = "neg" if diff_pct > 10 else ("over" if diff_pct < -10 else "pos")
+                diff_str = f'<span class="{css}">{diff_pct:+.1f}%</span>'
+            else:
+                diff_str = "-"
+
+            rows = [[util_str, goal_str, diff_str,
+                     str(u.get("chargeable", "-")), str(u.get("remaining", "-"))]]
+            sections.append(
+                "<h3>Utilization</h3>"
+                "<p>Your current utilization for the month is shown below.</p>"
+                + _table(["Utilization", "Goal", "Difference", "Chargeable Hrs", "Remaining Hrs"],
+                          rows, response_col=False)
+            )
+
     if not sections:
         return ""
 
     return f"""<html><head>{_CSS}</head><body>
 <p>Hi {first_name},</p>
-{month_notice}
 <p>Please review the items below and reply with your updates.</p>
 {"".join(sections)}
 <p class="sig">Best,<br>{sender_name}</p>
 </body></html>"""
 
 
-# ============================================================
-# ALIASES — used by app.py
-# ============================================================
-
-# True if SendGrid credentials are available
+# ── Aliases ───────────────────────────────────────────────────
 EMAIL_OK = email_configured()
 
 
 def send_emails_batch(emails: list) -> list:
     """
-    Send a list of email dicts. Each dict must have 'to', 'subject', 'body'.
-    Returns list of result dicts with 'to' and 'status'.
+    Send a list of email dicts with keys: to, subject, body.
+    Returns list of result dicts with keys: to, status.
     """
     results = []
-    for e in emails:
+    for email in emails:
         result = send_email(
-            to_email=e["to"],
-            subject=e["subject"],
-            body=e.get("body", ""),
+            to_email=email["to"],
+            subject=email["subject"],
+            body=email["body"],
         )
-        result["subject"] = e.get("subject", "")
         results.append(result)
     return results
