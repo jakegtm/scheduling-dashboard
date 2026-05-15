@@ -913,7 +913,7 @@ for owner in sorted(st.session_state.selected_owners, key=_rank):
         "body":    html,
     })
 
-    with st.expander(f"👁 {first_name} ({owner}) · {person_email}"):
+    with st.expander(f"👁 {first_name} ({DISPLAY_NAMES.get(owner, owner)}) · {person_email}"):
         components.html(html, height=500, scrolling=True)
 
 # ---- Send buttons ----
