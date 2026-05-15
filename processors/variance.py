@@ -7,7 +7,7 @@ import re
 from datetime import date, timedelta
 from collections import defaultdict
 
-from config import EMAIL_LOOKUP, FIRST_NAMES, VARIANCE_EXCLUDE_PREFIXES, OPENAIR_EMPLOYEE_MAP, DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX
+from config import EMAIL_LOOKUP, FIRST_NAMES, VARIANCE_EXCLUDE_PREFIXES, OPENAIR_EMPLOYEE_MAP, NAME_ALIASES, DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX
 
 
 # ================================================================
@@ -351,6 +351,7 @@ def read_schedule_hours(wb, sheet_name: str) -> dict:
         pair_start = PERSON_COL_START + ((col - PERSON_COL_START) // 2) * 2
         person_val = ws.cell(row=PERSON_NAME_ROW, column=pair_start).value
         person_str = str(person_val).strip() if person_val else ""
+        person_str = NAME_ALIASES.get(person_str, person_str)  # e.g. "O'Donnell" → "J. O'Donnell"
         if person_str and period_str:
             col_map[col] = (person_str, period_str)
 
@@ -451,7 +452,7 @@ def compute_variances(
                         question = "Do these hours need to be pushed to another period?"
 
                 variances.append({
-                    "person":       sched_person,
+                    "person":       NAME_ALIASES.get(sched_person, sched_person),
                     "first_name":   first_name,
                     "project_code": matched_code or oa_project,
                     "oa_name":      oa_project,
