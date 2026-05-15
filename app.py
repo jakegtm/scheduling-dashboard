@@ -300,30 +300,60 @@ with st.sidebar:
         )
         st.divider()
         st.subheader("📊 Variance Thresholds")
-        st.markdown("**📉 Scheduled but not actual**")
-        st.caption("Flag when scheduled hrs exceed actual hrs by more than:")
-        _cur_min = float(st.session_state.settings["variance_min"])
-        st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
-                  value=min(_cur_min, 50.0), label_visibility="collapsed",
-                  key="_form_sl_min")
-        f_var_min = st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
-                                    value=_cur_min)
-        st.markdown("**📈 Actual but not scheduled**")
-        st.caption("Flag when actual hrs exceed scheduled hrs by more than:")
-        _cur_max = float(st.session_state.settings["variance_max"])
-        st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
-                  value=min(_cur_max, 50.0), label_visibility="collapsed",
-                  key="_form_sl_max")
-        f_var_max = st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
-                                    value=_cur_max)
         applied = st.form_submit_button(
-            "✔ Apply Settings", type="primary", use_container_width=True)
+            "✔ Apply Budget Settings", type="primary", use_container_width=True)
 
     if applied:
         st.session_state.settings["budget_threshold"]   = float(f_budget)
         st.session_state.settings["negative_threshold"] = float(f_negative)
-        st.session_state.settings["variance_min"]       = float(f_var_min)
-        st.session_state.settings["variance_max"]       = float(f_var_max)
+        st.rerun()
+
+    # ── Variance thresholds — outside form for real-time slider↔input sync
+    st.divider()
+    st.subheader("📊 Variance Thresholds")
+
+    if "_vmin" not in st.session_state:
+        st.session_state._vmin = float(st.session_state.settings["variance_min"])
+    if "_vmax" not in st.session_state:
+        st.session_state._vmax = float(st.session_state.settings["variance_max"])
+
+    # on_change callbacks keep slider ↔ number input in sync
+    def _sl_min_changed():
+        st.session_state._vmin = st.session_state._sl_min
+        st.session_state._ni_min = st.session_state._sl_min
+    def _ni_min_changed():
+        v = float(st.session_state._ni_min or 0.0)
+        st.session_state._vmin = v
+        st.session_state._sl_min = min(v, 50.0)
+    def _sl_max_changed():
+        st.session_state._vmax = st.session_state._sl_max
+        st.session_state._ni_max = st.session_state._sl_max
+    def _ni_max_changed():
+        v = float(st.session_state._ni_max or 0.0)
+        st.session_state._vmax = v
+        st.session_state._sl_max = min(v, 50.0)
+
+    st.markdown("**📉 Scheduled but not actual**")
+    st.caption("Flag when scheduled hrs exceed actual hrs by more than:")
+    st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
+              value=min(st.session_state._vmin, 50.0), key="_sl_min",
+              label_visibility="collapsed", on_change=_sl_min_changed)
+    st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
+                    value=float(st.session_state._vmin or 0.0),
+                    key="_ni_min", on_change=_ni_min_changed)
+
+    st.markdown("**📈 Actual but not scheduled**")
+    st.caption("Flag when actual hrs exceed scheduled hrs by more than:")
+    st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
+              value=min(st.session_state._vmax, 50.0), key="_sl_max",
+              label_visibility="collapsed", on_change=_sl_max_changed)
+    st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
+                    value=float(st.session_state._vmax or 0.0),
+                    key="_ni_max", on_change=_ni_max_changed)
+
+    if st.button("✔ Apply Variance Settings", type="primary", use_container_width=True):
+        st.session_state.settings["variance_min"] = st.session_state._vmin
+        st.session_state.settings["variance_max"] = st.session_state._vmax
         st.rerun()
 
     st.divider()
@@ -380,6 +410,7 @@ if not st.session_state.run_triggered:
                     bytes(openair_file.read()) if openair_file else None
                 )
                 st.session_state.run_triggered = True
+                st.session_state._analysis_done = False  # show spinner on fresh run
             except Exception as e:
                 st.error(f"Could not read files: {e}")
         st.rerun()
@@ -406,7 +437,8 @@ oa_hash     = _hash(oa_bytes) if oa_bytes else ""
 # ============================================================
 # ANALYSIS — all runs under a single spinner to block UI
 # ============================================================
-with st.spinner("🔄 Running analysis — please wait…"):
+_show_spinner = not st.session_state.get("_analysis_done", False)
+with st.spinner("🔄 Running analysis — please wait…") if _show_spinner else st.empty():
 
     try:
         _wb_check = _load_wb(file_hash, sched_bytes)
@@ -449,6 +481,7 @@ with st.spinner("🔄 Running analysis — please wait…"):
         valid_people = get_valid_people(file_hash, sched_bytes, active_month)
     except Exception:
         pass
+    st.session_state._analysis_done = True  # suppress spinner on settings reruns
 
     # OpenAir or schedule-derived periods
     available_months, future_months = [], []
