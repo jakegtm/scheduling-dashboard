@@ -108,12 +108,12 @@ _CSS = """
 
 def _table(headers: list, rows: list, response_col: bool = True) -> str:
     all_headers = headers + (["Response"] if response_col else [])
-    th_html = "".join(f"<th>{h}</th>" for h in all_headers)
+    th_html = "".join(f'<th style="background-color:#0E2841;color:#fff;padding:8px 12px;text-align:left;font-weight:600;">{h}</th>' for h in all_headers)
     html = f"<table><thead><tr>{th_html}</tr></thead><tbody>"
     for row in rows:
-        cells = "".join(f"<td>{c}</td>" for c in row)
+        cells = "".join(f'<td style="padding:7px 12px;border-bottom:1px solid #dce3ea;vertical-align:top;">{c}</td>' for c in row)
         if response_col:
-            cells += '<td class="response-col">&nbsp;</td>'
+            cells += '<td style="background-color:#fffbe6;min-width:200px;">&nbsp;</td>'
         html += f"<tr>{cells}</tr>"
     html += "</tbody></table>"
     return html
@@ -186,7 +186,7 @@ def build_html_email(
                 for p in owner_tbd]
         sections.append(
             "<h3>TBD / Pending SOW Projects</h3>"
-            "<p>Please review the below projects with TBD budgets and provide any applicable updates.</p>"
+            "<p>If there are any updates on the below projects, please share — otherwise no action needed!</p>"
             + _table(["Project Code", "Status"], rows, response_col=True)
         )
 
