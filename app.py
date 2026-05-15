@@ -72,11 +72,15 @@ if _os.path.exists(_logo_path):
     except Exception:
         pass
 
-_hc1, _hc2 = st.columns([0.07, 0.93])
-with _hc1:
-    if _os.path.exists(_logo_path):
-        st.image(_logo_path, width=56)
-with _hc2:
+if _os.path.exists(_logo_path):
+    _hc1, _hc2 = st.columns([0.12, 0.88])
+    with _hc1:
+        st.image(_logo_path, width=70)
+    with _hc2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("## GTM Scheduling Analyzer")
+        st.caption(f"Today: {datetime.now().strftime('%A, %B %d, %Y')}")
+else:
     st.markdown("## GTM Scheduling Analyzer")
     st.caption(f"Today: {datetime.now().strftime('%A, %B %d, %Y')}")
 
