@@ -19,6 +19,15 @@ def _normalize(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
+def _normalize_period(s: str) -> str:
+    """
+    Standardize half-month period labels to 'Month D1-D2' (no spaces around dash).
+    Handles en-dash and em-dash too.
+    'May 1 - 15' -> 'May 1-15',  'May 16 - 31' -> 'May 16-31'
+    """
+    return re.sub(r"\s*[-–—]\s*", "-", str(s).strip())
+
+
 def _is_period_2(period_label: str) -> bool:
     """Return True if this is the second half of the month (16th onwards)."""
     m = re.search(r"(\d+)\s*[-–]\s*(\d+)", str(period_label))
@@ -289,13 +298,16 @@ def get_schedule_periods(wb, sheet_name: str) -> tuple:
 
 
 def filter_by_months(actual_data: dict, selected_periods: list) -> dict:
-    """Filter actual_data to only include the selected period labels."""
-    selected = set(selected_periods)
+    """Filter actual_data to only include the selected period labels.
+    Normalizes both sides so 'May 1 - 15' and 'May 1-15' always match."""
+    selected = {_normalize_period(p) for p in selected_periods}
     filtered = {}
     for person, projects in actual_data.items():
         filtered[person] = {}
         for proj, periods in projects.items():
-            kept = {p: h for p, h in periods.items() if p in selected}
+            kept = {_normalize_period(p): h
+                    for p, h in periods.items()
+                    if _normalize_period(p) in selected}
             if kept:
                 filtered[person][proj] = kept
     return filtered
@@ -331,7 +343,7 @@ def read_schedule_hours(wb, sheet_name: str) -> dict:
     col_map = {}
     for col in range(PERSON_COL_START, PERSON_COL_END + 1):
         period_val = ws.cell(row=PERIOD_LABEL_ROW, column=col).value
-        period_str = str(period_val).strip() if period_val else ""
+        period_str = _normalize_period(period_val) if period_val else ""
         pair_start = PERSON_COL_START + ((col - PERSON_COL_START) // 2) * 2
         person_val = ws.cell(row=PERSON_NAME_ROW, column=pair_start).value
         person_str = str(person_val).strip() if person_val else ""
