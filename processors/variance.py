@@ -140,7 +140,9 @@ def parse_openair_report(file_obj) -> dict:
 
     # Parse data rows
     for row in reader[header_idx + 1:]:
-        if len(row) <= max(filter(None.__ne__, [col_project, col_date, col_employee, col_hours])):
+        _valid_cols = [x for x in [col_project, col_date, col_employee, col_hours]
+                       if x is not None]  # safe — no filter(None.__ne__) to avoid NotImplemented
+        if not _valid_cols or len(row) <= max(_valid_cols):
             continue
 
         project_name  = str(row[col_project]).strip()  if col_project  is not None else ""
@@ -375,3 +377,42 @@ def compute_variances(
                 })
 
     return variances
+
+
+def get_schedule_periods(wb, sheet_name: str) -> tuple:
+    """
+    Return (available_periods, future_periods) derived from the schedule sheet,
+    used when no OpenAir file is uploaded.
+    """
+    import calendar
+    from datetime import date
+
+    sched = read_schedule_hours(wb, sheet_name)
+    periods: set = set()
+    for projects in sched.values():
+        for pdata in projects.values():
+            periods.update(pdata.keys())
+
+    today          = date.today()
+    sorted_periods = sorted(periods)
+    future_periods = []
+
+    for period in sorted_periods:
+        m = re.match(r"(\w+)\s+(\d+)\s*[-\u2013]\s*(\d+)", str(period))
+        if not m:
+            continue
+        month_str, start_day = m.group(1), int(m.group(2))
+        month_num = 0
+        for i, name in enumerate(calendar.month_name):
+            if name.lower().startswith(month_str.lower()[:3]):
+                month_num = i
+                break
+        if month_num == 0:
+            continue
+        try:
+            if date(today.year, month_num, start_day) > today:
+                future_periods.append(period)
+        except ValueError:
+            pass
+
+    return sorted_periods, future_periods
