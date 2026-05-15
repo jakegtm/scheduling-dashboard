@@ -15,7 +15,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from config import (
-    SENDER_EMAIL, SENDER_NAMES, EMAIL_LOOKUP, INTERN_NAMES,
+    SENDER_EMAIL, SENDER_NAMES, EMAIL_LOOKUP, INTERN_NAMES, NAME_ALIASES,
     DEFAULT_BUDGET_THRESHOLD, DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_PROJECTION_THRESHOLD_PCT,
     DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX,
@@ -30,7 +30,7 @@ from processors.variance        import (
     compute_variances, get_available_months, filter_by_months,
     get_schedule_periods,
 )
-from processors.utilization import process_utilization
+from processors.utilization import process_utilization, get_pto_schedule
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -73,6 +73,12 @@ def _lookup_email(name: str):
         if k.lower() == name.lower():
             return v
     return None
+
+def _normalize_name(name: str) -> str:
+    """Resolve name aliases so bare 'O\'Donnell' → 'J. O\'Donnell'."""
+    if not name:
+        return name
+    return NAME_ALIASES.get(name.strip(), name.strip())
 
 # ============================================================
 # SESSION STATE
@@ -149,7 +155,7 @@ def get_valid_people(file_hash, _b, active_month):
             for col in range(7, 45):
                 val = ws.cell(row=2, column=col).value
                 if val:
-                    people.add(str(val).strip())
+                    people.add(_normalize_name(str(val).strip()))
             return people
     return set()
 
@@ -201,6 +207,18 @@ def run_variance(file_hash, _b, oa_hash, _oa,
 # ============================================================
 active_month = datetime.now().strftime("%B")
 sender_name  = _sender_name()
+
+# Compute current month + next 2 for PTO schedule
+def _pto_months(current: str) -> list:
+    import calendar
+    month_names = list(calendar.month_name)[1:]  # Jan..Dec
+    try:
+        idx = month_names.index(current)
+    except ValueError:
+        return [current]
+    return [month_names[(idx + i) % 12] for i in range(3)]
+
+_pto_month_list = _pto_months(active_month)
 
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -352,6 +370,13 @@ with st.spinner("🔄 Running analysis — please wait…"):
     except Exception as e:
         st.warning(f"Utilization error: {e}")
 
+    pto_schedule_data = {}
+    try:
+        _wb_pto = _load_wb(file_hash, sched_bytes)
+        pto_schedule_data = get_pto_schedule(_wb_pto, _pto_month_list)
+    except Exception:
+        pass
+
     valid_people = set()
     try:
         valid_people = get_valid_people(file_hash, sched_bytes, active_month)
@@ -438,10 +463,10 @@ for person in valid_people:
     if email and not owners_data[person]["email"]:
         from config import FIRST_NAMES
         owners_data[person]["email"]      = email
-        owners_data[person]["first_name"] = FIRST_NAMES.get(person, person)
+        owners_data[person]["first_name"] = FIRST_NAMES.get(person, FIRST_NAMES.get(NAME_ALIASES.get(person, ""), person))
 
 for issue in tracker_issues:
-    o = issue.get("owner", "")
+    o = _normalize_name(issue.get("owner", ""))
     if not o or (valid_people and o not in valid_people):
         continue
     if not owners_data[o]["email"]:
@@ -450,7 +475,7 @@ for issue in tracker_issues:
     owners_data[o]["tracker"].append(issue)
 
 for issue in budget_issues:
-    o = issue.get("owner", "")
+    o = _normalize_name(issue.get("owner", ""))
     if not o or (valid_people and o not in valid_people):
         continue
     if not owners_data[o]["email"]:
@@ -459,7 +484,7 @@ for issue in budget_issues:
     owners_data[o]["budget"].append(issue)
 
 for v in variance_issues:
-    p = v.get("person", "")
+    p = _normalize_name(v.get("person", ""))
     if not p or (valid_people and p not in valid_people):
         continue
     if not owners_data[p]["email"]:
@@ -467,7 +492,7 @@ for v in variance_issues:
     owners_data[p]["variance"].append(v)
 
 for u in util_data:
-    p = u.get("person", "")
+    p = _normalize_name(u.get("person", ""))
     if not p or (valid_people and p not in valid_people):
         continue
     if not owners_data[p]["email"]:
@@ -669,6 +694,8 @@ for owner in sorted(st.session_state.selected_owners):
         tbd_projects  = tbd_projects,
         variance_issues=variance_list,
         util_data     = util_data,
+        pto_schedule  = pto_schedule_data,
+        pto_months    = _pto_month_list,
         has_openair   = has_openair,
         no_openair_note = not has_openair and bool(variance_list),
         selected_months = selected_months if len(selected_months) > 1 else None,
@@ -714,6 +741,8 @@ for owner in all_owner_keys:
         tbd_projects=tbd_projects,
         variance_issues=variance_list,
         util_data=util_data,
+        pto_schedule=pto_schedule_data,
+        pto_months=_pto_month_list,
         has_openair=has_openair,
         no_openair_note=not has_openair and bool(variance_list),
         selected_months=selected_months if len(selected_months) > 1 else None,
