@@ -97,7 +97,7 @@ FIRST_NAMES = {
     "Wojtowicz":    "Agnes",
     "Brooks":       "Valerie",
     "Lighthall":    "Haley",
-    "McGrogan":     "Amanda",
+    "Holmes (McGrogan)":     "Amanda",
     "Avington":     "Alyssa",
 }
 
