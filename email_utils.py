@@ -182,12 +182,16 @@ def build_html_email(
     # ── TBD / Pending SOW ────────────────────────────────────
     owner_tbd = [p for p in (tbd_projects or []) if p.get("owner") == owner]
     if owner_tbd:
-        rows = [[p.get("project_code", ""), p.get("status", "TBD")]
-                for p in owner_tbd]
+        rows = [
+            [p.get("project_code", ""),
+             p.get("status", "TBD"),
+             f"${p.get('budget', 0):,.0f}" if p.get("budget") else "TBD"]
+            for p in owner_tbd
+        ]
         sections.append(
             "<h3>TBD / Pending SOW Projects</h3>"
-            "<p>If there are any updates on the below projects, please share — otherwise no action needed!</p>"
-            + _table(["Project Code", "Status"], rows, response_col=True)
+            "<p>Please provide an update on the below projects.</p>"
+            + _table(["Project Code", "Status", "Budget"], rows, response_col=True)
         )
 
     # ── Variance ─────────────────────────────────────────────
@@ -300,7 +304,7 @@ def build_html_email(
     deadline = _next_monday()
     return f"""<html><head>{_CSS}</head><body>
 <p>Hi {first_name},</p>
-<p>Please review the items below and reply to <strong>Laren</strong> by <strong>{deadline} at 10:00 AM</strong>.</p>
+<p>Please review the items below and reply to <strong>Laren</strong> by <strong>{deadline} at 12:00 PM</strong>.</p>
 {"".join(sections)}
 <p class="sig">Best,<br>{sender_name}</p>
 </body></html>"""
