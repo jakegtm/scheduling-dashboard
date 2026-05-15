@@ -319,28 +319,32 @@ with st.sidebar:
 
     def _sync_sl_min(): st.session_state._vmin = st.session_state._sl_min
     def _sync_ni_min():
-        st.session_state._vmin = st.session_state._ni_min
-        st.session_state._sl_min = st.session_state._ni_min
+        val = st.session_state._ni_min or 0.0
+        st.session_state._vmin = val
+        st.session_state._sl_min = min(val, 50.0)  # slider capped at 50
     def _sync_sl_max(): st.session_state._vmax = st.session_state._sl_max
     def _sync_ni_max():
-        st.session_state._vmax = st.session_state._ni_max
-        st.session_state._sl_max = st.session_state._ni_max
+        val = st.session_state._ni_max or 0.0
+        st.session_state._vmax = val
+        st.session_state._sl_max = min(val, 50.0)  # slider capped at 50
 
     st.markdown("**📉 Scheduled but not actual**")
     st.caption("Flag when scheduled hrs exceed actual hrs by more than:")
-    st.slider("", min_value=0.0, max_value=20.0, step=0.5, format="%.1f hrs",
-              value=st.session_state._vmin, key="_sl_min",
+    st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
+              value=min(st.session_state._vmin, 50.0), key="_sl_min",
               label_visibility="collapsed", on_change=_sync_sl_min)
-    st.number_input("Exact (hrs):", min_value=0.0, max_value=20.0, step=0.5,
-                    value=st.session_state._vmin, key="_ni_min", on_change=_sync_ni_min)
+    st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
+                    value=float(st.session_state._vmin or 0.0),
+                    key="_ni_min", on_change=_sync_ni_min)
 
     st.markdown("**📈 Actual but not scheduled**")
     st.caption("Flag when actual hrs exceed scheduled hrs by more than:")
-    st.slider("", min_value=0.0, max_value=20.0, step=0.5, format="%.1f hrs",
-              value=st.session_state._vmax, key="_sl_max",
+    st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
+              value=min(st.session_state._vmax, 50.0), key="_sl_max",
               label_visibility="collapsed", on_change=_sync_sl_max)
-    st.number_input("Exact (hrs):", min_value=0.0, max_value=20.0, step=0.5,
-                    value=st.session_state._vmax, key="_ni_max", on_change=_sync_ni_max)
+    st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
+                    value=float(st.session_state._vmax or 0.0),
+                    key="_ni_max", on_change=_sync_ni_max)
 
     if st.button("✔ Apply Variance Settings", use_container_width=True, type="primary"):
         st.session_state.settings["variance_min"] = st.session_state._vmin
