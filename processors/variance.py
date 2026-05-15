@@ -431,9 +431,9 @@ def compute_variances(
                 all_periods = set(actual_periods) | set(sched_periods)
 
             for period in all_periods:
-                actual_hrs = round(actual_periods.get(period, 0.0), 1)
-                sched_hrs  = round(sched_periods.get(period, 0.0), 1)
-                diff       = round(actual_hrs - sched_hrs, 1)
+                actual_hrs = round(actual_periods.get(period, 0.0), 2)
+                sched_hrs  = round(sched_periods.get(period, 0.0), 2)
+                diff       = round(actual_hrs - sched_hrs, 2)
 
                 # Include equal-to on both bounds
                 if not (diff < min_diff or diff > max_diff):  # strict: <-5 or >0
