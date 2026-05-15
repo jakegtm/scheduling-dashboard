@@ -132,6 +132,7 @@ def build_html_email(
     has_openair: bool      = False,
     no_openair_note: bool  = False,
     selected_months: list  = None,
+    is_staff: bool         = False,
 ) -> str:
     """Build one combined HTML email for an owner."""
     sender_name = _get_sender_name()
@@ -185,8 +186,7 @@ def build_html_email(
                 for p in owner_tbd]
         sections.append(
             "<h3>TBD / Pending SOW Projects</h3>"
-            "<p>The following projects have TBD or Pending SOW budgets. "
-            "If you have any updates, please reply — otherwise no action needed.</p>"
+            "<p>Please review the below projects with TBD budgets and provide any applicable updates.</p>"
             + _table(["Project Code", "Status"], rows, response_col=True)
         )
 
@@ -202,16 +202,27 @@ def build_html_email(
             diff     = v.get("difference", 0)
             css      = "over" if diff < 0 else "neg"
             diff_fmt = f'<span class="{css}">{diff:+.1f}</span>'
-            rows.append([
-                v.get("project_code", ""), v.get("period", ""),
-                str(v.get("actual_hours", "")), str(v.get("sched_hours", "")),
-                diff_fmt, v.get("question", ""),
-            ])
+            if is_staff:
+                rows.append([
+                    v.get("project_code", ""), v.get("period", ""),
+                    str(v.get("actual_hours", "")), str(v.get("sched_hours", "")),
+                    diff_fmt, v.get("question", ""),
+                ])
+            else:
+                rows.append([
+                    v.get("person", ""), v.get("project_code", ""), v.get("period", ""),
+                    str(v.get("actual_hours", "")), str(v.get("sched_hours", "")),
+                    diff_fmt, v.get("question", ""),
+                ])
+        var_headers = (
+            ["Project Code", "Period", "Actual Hrs", "Scheduled Hrs", "Difference", "To be reviewed"]
+            if is_staff else
+            ["Person", "Project Code", "Period", "Actual Hrs", "Scheduled Hrs", "Difference", "To be reviewed"]
+        )
         sections.append(
             "<h3>Actual vs Schedule Variances</h3>"
             "<p>Please review the below variances and provide updates as needed.</p>"
-            + _table(["Project Code", "Period", "Actual Hrs",
-                       "Scheduled Hrs", "Difference", "To be reviewed"], rows)
+            + _table(var_headers, rows)
         )
 
     # ── Utilization ──────────────────────────────────────────
@@ -232,18 +243,24 @@ def build_html_email(
 
             # Question based on difference
             if diff_pct is not None and diff_pct < -10:
-                util_question = "What are you working on? (non-chargeable hours)"
+                util_question = (
+                    "What do you plan to do with your non-charge time? "
+                    "Are there any projects you know of that aren't in the schedule yet?"
+                )
             elif diff_pct is not None and diff_pct > 10:
-                util_question = "Do we need to reallocate work?"
+                util_question = (
+                    "Is there any project work you could use assistance with, "
+                    "or places where we can shift hours?"
+                )
             else:
-                util_question = ""
+                util_question = ""  # Within 10% — informational only, no action needed
 
             rows = [[util_str, goal_str, diff_str,
                      str(u.get("chargeable", "-")), str(u.get("remaining", "-")),
                      util_question]]
             sections.append(
                 "<h3>Utilization</h3>"
-                "<p>Your current utilization for the month is shown below.</p>"
+"<p>Please see below projected utilization for the month.</p>"
                 + _table(["Utilization", "Goal", "Difference", "Chargeable Hrs", "Remaining Hrs",
                            "To be reviewed"],
                           rows, response_col=True)
