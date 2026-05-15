@@ -15,7 +15,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from config import (
-    SENDER_EMAIL, SENDER_NAMES, EMAIL_LOOKUP, INTERN_NAMES, NAME_ALIASES,
+    SENDER_EMAIL, SENDER_NAMES, EMAIL_LOOKUP, INTERN_NAMES, STAFF_NAMES, NAME_ALIASES,
     DEFAULT_BUDGET_THRESHOLD, DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_PROJECTION_THRESHOLD_PCT,
     DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX,
@@ -499,13 +499,41 @@ for issue in budget_issues:
         owners_data[o]["first_name"] = issue.get("owner_first", o)
     owners_data[o]["budget"].append(issue)
 
+# Build project → owner map from tracker + budget data
+_project_owner_map = {}
+for _issue in tracker_issues:
+    _code  = str(_issue.get("project_code", "")).strip()
+    _owner = _normalize_name(_issue.get("owner", ""))
+    if _code and _owner:
+        _project_owner_map[_code] = _owner
+for _issue in budget_issues:
+    _code  = str(_issue.get("project_code", "")).strip()
+    _owner = _normalize_name(_issue.get("owner", ""))
+    if _code and _owner:
+        _project_owner_map.setdefault(_code, _owner)
+
 for v in variance_issues:
-    p = _normalize_name(v.get("person", ""))
-    if not p or (valid_people and p not in valid_people):
-        continue
-    if not owners_data[p]["email"]:
-        owners_data[p]["email"] = _lookup_email(p)
-    owners_data[p]["variance"].append(v)
+    person       = _normalize_name(v.get("person", ""))
+    project_code = v.get("project_code", "")
+    proj_owner   = _normalize_name(_project_owner_map.get(project_code, ""))
+
+    # Staff members get their OWN variance rows in their personal email
+    if person in STAFF_NAMES and person and (not valid_people or person in valid_people):
+        if not owners_data[person]["email"]:
+            owners_data[person]["email"] = _lookup_email(person)
+        owners_data[person]["variance"].append(v)
+
+    # Project owner gets ALL rows for their projects (including staff rows)
+    if proj_owner and proj_owner not in STAFF_NAMES and (not valid_people or proj_owner in valid_people):
+        if not owners_data[proj_owner]["email"]:
+            owners_data[proj_owner]["email"] = _lookup_email(proj_owner)
+        owners_data[proj_owner]["variance"].append(v)
+    elif not proj_owner and person not in STAFF_NAMES:
+        # No project owner found — fallback to person themselves
+        if person and (not valid_people or person in valid_people):
+            if not owners_data[person]["email"]:
+                owners_data[person]["email"] = _lookup_email(person)
+            owners_data[person]["variance"].append(v)
 
 for u in util_data:
     p = _normalize_name(u.get("person", ""))
@@ -648,7 +676,7 @@ if not active_owners:
     st.info("No staff found with email addresses — check config.py EMAIL_LOOKUP.")
     st.stop()
 
-st.metric("Staff members", len(active_owners))
+st.metric("TAS Members", len(active_owners))
 all_owner_keys = sorted(active_owners.keys())
 
 if not st.session_state.selected_owners.issubset(set(all_owner_keys)):
@@ -715,6 +743,7 @@ for owner in sorted(st.session_state.selected_owners):
         has_openair   = has_openair,
         no_openair_note = not has_openair and bool(variance_list),
         selected_months = selected_months if len(selected_months) > 1 else None,
+        is_staff      = owner in STAFF_NAMES,
     )
 
     if not html:
@@ -762,6 +791,7 @@ for owner in all_owner_keys:
         has_openair=has_openair,
         no_openair_note=not has_openair and bool(variance_list),
         selected_months=selected_months if len(selected_months) > 1 else None,
+        is_staff=owner in STAFF_NAMES,
     )
     if html:
         all_sendable.append({"to": data["email"], "subject": f"Scheduling Review — {active_month}",
