@@ -179,45 +179,113 @@ def parse_openair_report(file_obj) -> dict:
     return result
 
 
-def get_available_months(actual_data: dict) -> tuple:
+def _all_year_periods(year: int = None) -> list:
     """
-    Return (all_periods_sorted, future_periods) where future_periods
-    are period labels whose start date is after today.
-    Period labels are expected in "Month D1-D2" format, e.g. "May 1-15".
+    Generate all 24 standard half-month periods for the given year.
+    e.g. ["January 1-15", "January 16-31", "February 1-15", ...]
+    Handles leap-year February automatically.
     """
-    import calendar
-    from datetime import date
+    import calendar as _cal
+    from datetime import date as _date
+    if year is None:
+        year = _date.today().year
+    result = []
+    for month_num in range(1, 13):
+        month_name = _cal.month_name[month_num]
+        last_day   = _cal.monthrange(year, month_num)[1]
+        result.append(f"{month_name} 1-15")
+        result.append(f"{month_name} 16-{last_day}")
+    return result
 
-    periods: set = set()
-    for projects in actual_data.values():
-        for periods_dict in projects.values():
-            periods.update(periods_dict.keys())
 
-    today          = date.today()
-    sorted_periods = sorted(periods)
+def _period_sort_key(period: str) -> tuple:
+    """Return (month_num, start_day) for chronological sorting."""
+    import calendar as _cal
+    m = re.match(r"(\w+)\s+(\d+)", str(period))
+    if not m:
+        return (99, 99)
+    month_str = m.group(1)
+    start_day = int(m.group(2))
+    for i, name in enumerate(_cal.month_name):
+        if name.lower().startswith(month_str.lower()[:3]):
+            return (i, start_day)
+    return (99, 99)
+
+
+def _classify_periods(all_periods: set, year: int = None) -> tuple:
+    """
+    Given a set of period strings, return:
+        (sorted_periods, future_periods)
+    where future_periods are those whose start date is after today.
+    """
+    import calendar as _cal
+    from datetime import date as _date
+    today = _date.today()
+    if year is None:
+        year = today.year
+
+    sorted_periods = sorted(all_periods, key=_period_sort_key)
     future_periods = []
 
     for period in sorted_periods:
-        m = re.match(r"(\w+)\s+(\d+)\s*[-\u2013]\s*(\d+)", str(period))
+        m = re.match(r"(\w+)\s+(\d+)", str(period))
         if not m:
             continue
-        month_str, start_day = m.group(1), int(m.group(2))
-        # Match month name (full or 3-letter abbreviation)
+        month_str = m.group(1)
+        start_day = int(m.group(2))
         month_num = 0
-        for i, name in enumerate(calendar.month_name):
+        for i, name in enumerate(_cal.month_name):
             if name.lower().startswith(month_str.lower()[:3]):
                 month_num = i
                 break
         if month_num == 0:
             continue
         try:
-            period_start = date(today.year, month_num, start_day)
-            if period_start > today:
+            if _date(year, month_num, start_day) > today:
                 future_periods.append(period)
         except ValueError:
             pass
 
     return sorted_periods, future_periods
+
+
+def get_available_months(actual_data: dict) -> tuple:
+    """
+    Return (all_periods_sorted, future_periods).
+
+    Periods = all 24 standard half-month periods for the current year
+              UNION any periods found in actual_data (OpenAir).
+    Future periods are those whose start date is after today.
+    """
+    from datetime import date as _date
+    year    = _date.today().year
+    periods = set(_all_year_periods(year))
+
+    # Add any extra periods from OpenAir data (e.g. previous year carry-over)
+    for projects in actual_data.values():
+        for periods_dict in projects.values():
+            periods.update(periods_dict.keys())
+
+    return _classify_periods(periods, year)
+
+
+def get_schedule_periods(wb, sheet_name: str) -> tuple:
+    """
+    Return (all_periods_sorted, future_periods) for use when no OpenAir
+    file is uploaded. Always includes all 24 standard periods for the year
+    so the user can select any period to see scheduled hours.
+    """
+    from datetime import date as _date
+    year    = _date.today().year
+    periods = set(_all_year_periods(year))
+
+    # Also union with any periods found in the actual schedule data
+    sched = read_schedule_hours(wb, sheet_name)
+    for projects in sched.values():
+        for pdata in projects.values():
+            periods.update(pdata.keys())
+
+    return _classify_periods(periods, year)
 
 
 def filter_by_months(actual_data: dict, selected_periods: list) -> dict:
@@ -377,42 +445,3 @@ def compute_variances(
                 })
 
     return variances
-
-
-def get_schedule_periods(wb, sheet_name: str) -> tuple:
-    """
-    Return (available_periods, future_periods) derived from the schedule sheet,
-    used when no OpenAir file is uploaded.
-    """
-    import calendar
-    from datetime import date
-
-    sched = read_schedule_hours(wb, sheet_name)
-    periods: set = set()
-    for projects in sched.values():
-        for pdata in projects.values():
-            periods.update(pdata.keys())
-
-    today          = date.today()
-    sorted_periods = sorted(periods)
-    future_periods = []
-
-    for period in sorted_periods:
-        m = re.match(r"(\w+)\s+(\d+)\s*[-\u2013]\s*(\d+)", str(period))
-        if not m:
-            continue
-        month_str, start_day = m.group(1), int(m.group(2))
-        month_num = 0
-        for i, name in enumerate(calendar.month_name):
-            if name.lower().startswith(month_str.lower()[:3]):
-                month_num = i
-                break
-        if month_num == 0:
-            continue
-        try:
-            if date(today.year, month_num, start_day) > today:
-                future_periods.append(period)
-        except ValueError:
-            pass
-
-    return sorted_periods, future_periods
