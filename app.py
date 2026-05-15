@@ -292,7 +292,7 @@ def get_sched_periods(file_hash, _b, active_month):
 @st.cache_data(show_spinner=False)
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
-                 _v="v12"):  # bump _v to bust stale cache after code changes
+                 _v="v13"):  # bump _v to bust stale cache after code changes
     wb = _load_wb(file_hash, _b)
     sched_sheet = next(
         (s for s in wb.sheetnames if s.lower().startswith(active_month[:3].lower())),
