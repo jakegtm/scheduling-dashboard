@@ -7,7 +7,7 @@ import re
 from datetime import date, timedelta
 from collections import defaultdict
 
-from config import EMAIL_LOOKUP, FIRST_NAMES, VARIANCE_EXCLUDE_PREFIXES, DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX
+from config import EMAIL_LOOKUP, FIRST_NAMES, VARIANCE_EXCLUDE_PREFIXES, OPENAIR_EMPLOYEE_MAP, DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX
 
 
 # ================================================================
@@ -171,7 +171,11 @@ def parse_openair_report(file_obj) -> dict:
             continue
 
         # Last name from "LastName, FirstName"
-        last_name = employee_str.split(",")[0].strip() if "," in employee_str else employee_str
+        # Check explicit map first (handles ambiguous last names like O'Donnell)
+        if employee_str in OPENAIR_EMPLOYEE_MAP:
+            last_name = OPENAIR_EMPLOYEE_MAP[employee_str]
+        else:
+            last_name = employee_str.split(",")[0].strip() if "," in employee_str else employee_str
 
         # Parse date → period label
         d = _parse_date(date_str)
