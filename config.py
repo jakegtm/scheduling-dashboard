@@ -42,6 +42,32 @@ PURPLE_HEX_CODES = {
     "800080",
 }
 
+# --- POSITION ORDER ---
+# Role codes from the Utilization tab (col B). Used for sorting names everywhere.
+POSITION_ORDER = {"MD": 1, "DR": 2, "SM": 3, "MR": 4, "SR": 5, "AN": 6, "IN": 7}
+
+# Maps each person's name (as it appears in the file) to their role code.
+PERSON_ROLE = {
+    "Sorrentino":   "MD",
+    "Colonna":      "DR",
+    "Browne":       "SM",
+    "Jean":         "SM",
+    "Hendrickson":  "SM",
+    "Lowry":        "SM",
+    "Wojtowicz":    "MR",
+    "Brooks":       "MR",
+    "Lighthall":    "MR",
+    "McGrogan":     "SR",
+    "S. O'Donnell": "AN",
+    "Avington":     "AN",
+    "J. O'Donnell": "IN",
+}
+
+def _rank(name: str) -> tuple:
+    """Sort key: (position_rank, last_name). Lower rank = higher seniority."""
+    role = PERSON_ROLE.get(name, "ZZ")
+    return (POSITION_ORDER.get(role, 99), name)
+
 # --- NAME ALIASES ---
 # Maps ambiguous names (no initials) to their canonical form.
 # "O'Donnell" in older sheets has no initials — treat it as "J. O'Donnell".
