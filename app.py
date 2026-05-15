@@ -181,7 +181,7 @@ def get_sched_periods(file_hash, _b, active_month):
 @st.cache_data(show_spinner=False)
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
-                 _v="v6"):  # bump _v to bust stale cache after code changes
+                 _v="v7"):  # bump _v to bust stale cache after code changes
     wb = _load_wb(file_hash, _b)
     sched_sheet = next(
         (s for s in wb.sheetnames if s.lower().startswith(active_month[:3].lower())),
@@ -247,17 +247,24 @@ with st.sidebar:
         )
         st.divider()
         st.subheader("📊 Variance Thresholds")
-        vc1, vc2 = st.columns(2)
-        with vc1:
-            f_var_min = st.number_input(
-                "Min (flag if <=)", step=1.0,
-                value=float(st.session_state.settings["variance_min"]),
-            )
-        with vc2:
-            f_var_max = st.number_input(
-                "Max (flag if >=)", step=1.0,
-                value=float(st.session_state.settings["variance_max"]),
-            )
+
+        st.markdown("**📉 Scheduled but not worked**")
+        st.caption("Flag when scheduled hours exceed actual hours by more than this.")
+        _min_cur = float(st.session_state.settings["variance_min"])
+        _min_sl = st.slider("", min_value=0.0, max_value=20.0,
+            value=_min_cur, step=0.5, format="%.1f hrs",
+            label_visibility="collapsed", key="sl_var_min")
+        f_var_min = st.number_input("Exact (hrs):", min_value=0.0,
+            max_value=20.0, value=_min_sl, step=0.5, key="ni_var_min")
+
+        st.markdown("**📈 Worked but not scheduled**")
+        st.caption("Flag when actual hours exceed scheduled hours by more than this.")
+        _max_cur = float(st.session_state.settings["variance_max"])
+        _max_sl = st.slider("", min_value=0.0, max_value=20.0,
+            value=_max_cur, step=0.5, format="%.1f hrs",
+            label_visibility="collapsed", key="sl_var_max")
+        f_var_max = st.number_input("Exact (hrs):", min_value=0.0,
+            max_value=20.0, value=_max_sl, step=0.5, key="ni_var_max")
         applied = st.form_submit_button(
             "✔ Apply Settings", type="primary", use_container_width=True)
 
@@ -458,7 +465,7 @@ if available_months:
                     file_hash, sched_bytes,
                     oa_hash, oa_bytes,
                     tuple(selected_months),
-                    variance_min, variance_max,
+                    -variance_min, variance_max,  # min is stored positive, negated here
                     active_month,
                 )
             except Exception as e:
