@@ -436,7 +436,7 @@ def compute_variances(
                 diff       = round(actual_hrs - sched_hrs, 2)
 
                 # Include equal-to on both bounds
-                if not (diff < min_diff or diff > max_diff):  # strict: <-5 or >0
+                if not (diff <= min_diff or diff >= max_diff):  # inclusive: <=-5 or >=0
                     continue
 
                 # Context-aware question
