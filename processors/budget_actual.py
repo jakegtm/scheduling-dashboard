@@ -98,7 +98,7 @@ def process_budget_actual(
         owner_str = str(owner).strip() if owner else ""
 
         # Flag over-budget (remaining is very negative)
-        if remaining < -neg_thresh:
+        if remaining <= -neg_thresh:
             issues.append({
                 "client":       client,
                 "project_code": str(code).strip() if code else "",
