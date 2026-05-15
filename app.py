@@ -93,6 +93,64 @@ else:
     st.markdown("## GTM Scheduling Analyzer")
     st.caption(f"Today: {datetime.now().strftime('%A, %B %d, %Y')}")
 
+# ============================================================
+# AUTHENTICATION
+# Credentials stored in Streamlit Secrets:
+#   [auth]
+#   username = "gtmtas"
+#   password_hash = "77c0b600dc99b2c0b5dc5db009c929f16927148a53cd11b4be986237599f69ee"
+# Falls back to hardcoded hash if secrets not configured.
+# ============================================================
+import hashlib as _hl
+
+_FALLBACK_USER = "gtmtas"
+_FALLBACK_HASH = "77c0b600dc99b2c0b5dc5db009c929f16927148a53cd11b4be986237599f69ee"
+
+def _check_credentials(username: str, password: str) -> bool:
+    pw_hash = _hl.sha256(password.encode()).hexdigest()
+    try:
+        stored_user = st.secrets["auth"]["username"]
+        stored_hash = st.secrets["auth"]["password_hash"]
+    except (KeyError, FileNotFoundError):
+        stored_user = _FALLBACK_USER
+        stored_hash = _FALLBACK_HASH
+    return username.strip() == stored_user and pw_hash == stored_hash
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.markdown("<div style='height:40px'></div>", unsafe_allow_html=True)
+    _, login_col, _ = st.columns([1, 1.2, 1])
+    with login_col:
+        if _logo_b64:
+            st.markdown(
+                f'<div style="text-align:center;margin-bottom:8px;">'
+                f'<img src="data:image/png;base64,{_logo_b64}" style="height:80px;width:auto;"></div>',
+                unsafe_allow_html=True)
+        st.markdown(
+            '<div style="text-align:center;font-size:1.4rem;font-weight:700;'
+            'color:#0E2841;margin-bottom:4px;">GTM Scheduling Analyzer</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            '<div style="text-align:center;color:#64748b;margin-bottom:24px;'
+            'font-size:0.9rem;">Sign in to continue</div>',
+            unsafe_allow_html=True)
+        with st.form("login_form"):
+            username = st.text_input("Username", placeholder="Enter username")
+            password = st.text_input("Password", type="password", placeholder="Enter password")
+            submitted = st.form_submit_button("Sign In", use_container_width=True, type="primary")
+            if submitted:
+                if _check_credentials(username, password):
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect username or password.")
+    st.stop()
+
+# ── Logout button in sidebar ──────────────────────────────────
+# (rendered after authentication check so sidebar only shows when logged in)
+
 if not email_configured():
     st.warning("⚠️ **Email credentials not configured.** "
                "Add SendGrid keys in Streamlit Secrets to enable sending.")
@@ -234,7 +292,7 @@ def get_sched_periods(file_hash, _b, active_month):
 @st.cache_data(show_spinner=False)
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
-                 _v="v10"):  # bump _v to bust stale cache after code changes
+                 _v="v11"):  # bump _v to bust stale cache after code changes
     wb = _load_wb(file_hash, _b)
     sched_sheet = next(
         (s for s in wb.sheetnames if s.lower().startswith(active_month[:3].lower())),
@@ -285,7 +343,14 @@ def _pto_months(current: str) -> list:
 _pto_month_list = _pto_months(active_month)
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    _lcol1, _lcol2 = st.columns([0.65, 0.35])
+    with _lcol1:
+        st.header("⚙️ Settings")
+    with _lcol2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Sign Out", use_container_width=True):
+            st.session_state.authenticated = False
+            st.rerun()
     with st.form("settings_form"):
         st.subheader("💰 Budget to Actual")
         f_budget = st.number_input(
