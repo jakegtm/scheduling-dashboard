@@ -8,7 +8,7 @@ import urllib.error
 import json
 from datetime import date, timedelta
 import streamlit as st
-from config import SENDER_EMAIL, SENDER_NAMES
+from config import SENDER_EMAIL, SENDER_NAMES, _rank
 
 
 def _get_credentials() -> tuple[str, str]:
@@ -197,8 +197,17 @@ def build_html_email(
                 '<div class="info">ℹ️ <strong>Note:</strong> No OpenAir report was uploaded, '
                 'so actual hours are shown as 0. Schedule hours reflect what is planned.</div>'
             )
+        # Sort: owner's own rows first, then others by seniority rank then alpha
+        _sorted_var = sorted(
+            variance_issues,
+            key=lambda v: (
+                0 if v.get("person", "") == owner else 1,
+                _rank(v.get("person", "")),
+                v.get("project_code", ""),
+            )
+        )
         rows = []
-        for v in variance_issues:
+        for v in _sorted_var:
             diff     = v.get("difference", 0)
             css      = "over" if diff < 0 else "neg"
             diff_fmt = f'<span class="{css}">{diff:+.1f}</span>'
