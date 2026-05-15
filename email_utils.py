@@ -291,7 +291,7 @@ def build_html_email(
                     "<h3>Scheduled PTO</h3>"
                     "<p>Your scheduled PTO for the current and next two months is shown below. "
                     "Please reply if any updates are needed.</p>"
-                    + _table(["Month", "PTO Hours"], rows, response_col=True)
+                    + _table(["Month", "PTO Hours"], rows, response_col=False)
                 )
 
     if not sections:
