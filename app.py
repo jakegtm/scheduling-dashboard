@@ -16,6 +16,7 @@ import streamlit.components.v1 as components
 
 from config import (
     SENDER_EMAIL, SENDER_NAMES, EMAIL_LOOKUP, INTERN_NAMES, STAFF_NAMES, NAME_ALIASES,
+    POSITION_ORDER, PERSON_ROLE, _rank,
     DEFAULT_BUDGET_THRESHOLD, DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_PROJECTION_THRESHOLD_PCT,
     DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX,
@@ -655,13 +656,14 @@ with tab4:
             st.info(f"Showing across {len(selected_months)} periods: "
                     f"{', '.join(selected_months)}")
         st.metric("⚠️ Variances Found", len(variance_issues))
+        _sorted_v = sorted(variance_issues, key=lambda v: (_rank(v.get("person","")), v.get("project_code","")))
         st.dataframe(
             [{"Person": v.get("person",""), "Project": v.get("project_code",""),
               "Period": v.get("period",""),
               "Actual Hrs": v.get("actual_hours",0), "Sched Hrs": v.get("sched_hours",0),
               "Diff": v.get("difference",0), "To Review": v.get("question",""),
               "Future": "🔮" if v.get("is_future") else ""}
-             for v in variance_issues],
+             for v in _sorted_v],
             use_container_width=True, hide_index=True)
 
 # ============================================================
@@ -677,7 +679,7 @@ if not active_owners:
     st.stop()
 
 st.metric("TAS Members", len(active_owners))
-all_owner_keys = sorted(active_owners.keys())
+all_owner_keys = sorted(active_owners.keys(), key=_rank)
 
 if not st.session_state.selected_owners.issubset(set(all_owner_keys)):
     st.session_state.selected_owners = set(all_owner_keys)
@@ -712,7 +714,7 @@ for owner in all_owner_keys:
 st.markdown("**Email previews:**")
 combined_emails = []
 
-for owner in sorted(st.session_state.selected_owners):
+for owner in sorted(st.session_state.selected_owners, key=_rank):
     if owner not in active_owners:
         continue
     data         = active_owners[owner]
@@ -771,7 +773,7 @@ if no_email:
 sendable = [e for e in combined_emails if e.get("to")]
 
 all_sendable = []
-for owner in all_owner_keys:
+for owner in sorted(all_owner_keys, key=_rank):
     data = active_owners.get(owner, {})
     if not data.get("email"):
         continue
