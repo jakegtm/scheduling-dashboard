@@ -218,3 +218,71 @@ def build_utilization_emails(
         })
 
     return emails
+
+
+def get_pto_schedule(wb, target_months: list) -> dict:
+    """
+    Extract scheduled PTO hours for each person across the given months.
+
+    Returns:
+        {
+            "Wojtowicz": {"May": 8, "June": 72, "July": 0},
+            "Brooks":    {"May": 56, "June": 0,  "July": 0},
+            ...
+        }
+    Only includes people who have at least one non-zero PTO entry.
+    """
+    sheet_name = _find_util_sheet(wb)
+    if not sheet_name:
+        return {}
+
+    ws   = wb[sheet_name]
+    rows = list(ws.iter_rows(values_only=True))
+
+    # Normalise target months to title-case for matching
+    # (handles "May", "may", "JUNE", etc.)
+    target_set = {m.strip().title() for m in target_months}
+
+    # Map: {person: {month: pto}}
+    result: dict = {}
+
+    current_month = None
+    in_section    = False
+
+    for row in rows:
+        row = list(row) + [None] * 15
+
+        col_a = row[0]
+        col_b = row[1]
+        col_c = row[2]
+        pto   = row[COL_PTO]   # index 6 = column G
+
+        # ── Detect new month section ─────────────────────────
+        if col_a is not None and hasattr(col_a, "strftime"):
+            # Month header row — col_b is the month name (e.g. "May", "June")
+            month_label = str(col_b).strip().title() if col_b else col_a.strftime("%B")
+            current_month = month_label
+            in_section    = current_month in target_set
+            continue
+
+        if not in_section or current_month is None:
+            continue
+
+        # ── Skip header / total rows ─────────────────────────
+        if col_b is not None and str(col_b).strip().lower() == "# of days":
+            continue
+        if col_c is not None and str(col_c).strip().lower() == "total":
+            in_section = False
+            continue
+
+        # ── Data row ─────────────────────────────────────────
+        person = str(col_c).strip() if col_c else ""
+        if not person or person.lower() in ("", "total", "# of days"):
+            continue
+
+        pto_val = _to_float(pto) or 0.0
+
+        result.setdefault(person, {})
+        result[person][current_month] = pto_val
+
+    return result
