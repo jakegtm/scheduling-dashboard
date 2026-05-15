@@ -467,4 +467,68 @@ def compute_variances(
                     "person_email": _lookup_email(sched_person),
                 })
 
+    # ── Second pass: schedule-only projects ─────────────────────────────
+    # Projects with scheduled hours but NO OpenAir entries (actual = 0).
+    # These are missed by the first loop since we only iterate actual_data.
+    _seen = set()  # track (person, project, period) already flagged above
+    for v in variances:
+        _seen.add((v["person"], v["project_code"], v["period"]))
+
+    for sched_person, sched_projects in schedule_data.items():
+        # Find the corresponding actual_data key (case-insensitive)
+        actual_person_key = None
+        for ap in actual_data:
+            if ap.lower() == sched_person.lower():
+                actual_person_key = ap
+                break
+        person_actual = actual_data.get(actual_person_key, {})
+
+        # Collect all project codes already covered by OpenAir for this person
+        matched_oa_codes = set()
+        for oa_proj in person_actual:
+            code = _match_project(oa_proj, list(sched_projects.keys()))
+            if code:
+                matched_oa_codes.add(code)
+
+        first_name = _lookup_first(sched_person)
+        person_name = NAME_ALIASES.get(sched_person, sched_person)
+
+        for sched_code, period_data in sched_projects.items():
+            if any(sched_code.lower().startswith(p) for p in _excl):
+                continue
+            if sched_code in matched_oa_codes:
+                continue  # already handled in first pass
+
+            periods = set(selected_periods) if selected_periods else set(period_data.keys())
+            for period in periods:
+                sched_hrs  = round(period_data.get(period, 0.0), 2)
+                actual_hrs = 0.0  # no OpenAir entry → 0 actual hours
+                if sched_hrs == 0.0:
+                    continue
+                diff = round(actual_hrs - sched_hrs, 2)  # always negative
+                if diff == 0.0:
+                    continue
+                if not (diff < min_diff or diff > max_diff):
+                    continue
+                if (person_name, sched_code, period) in _seen:
+                    continue
+
+                question = (
+                    "Are these scheduled hours still expected to hit?"
+                    if _is_period_2(period)
+                    else "Do these hours need to be pushed to another period?"
+                )
+                variances.append({
+                    "person":       person_name,
+                    "first_name":   first_name,
+                    "project_code": sched_code,
+                    "oa_name":      "",
+                    "period":       period,
+                    "actual_hours": actual_hrs,
+                    "sched_hours":  sched_hrs,
+                    "difference":   diff,
+                    "question":     question,
+                    "person_email": _lookup_email(sched_person),
+                })
+
     return variances
