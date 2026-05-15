@@ -17,8 +17,8 @@ DEFAULT_PROJECTION_THRESHOLD_PCT = 0.80    # Flag if remaining/budget >= this
 DEFAULT_NEGATIVE_THRESHOLD       = 100     # Flag remaining <= -this
 
 # Variance (Actual vs Schedule) — min/max difference to flag
-DEFAULT_VARIANCE_MIN = -5   # Flag if difference <= this (actual < schedule)
-DEFAULT_VARIANCE_MAX = 0    # Flag if difference >= this (actual > schedule)
+DEFAULT_VARIANCE_MIN = 5    # Hours under-worked threshold (displayed as positive, negated in code)
+DEFAULT_VARIANCE_MAX = 0    # Hours over-worked threshold (flag if actual exceeds scheduled by more than this)
 
 # --- ROLE RULES ---
 # Names of staff who only receive their own variance rows (not all team rows).
