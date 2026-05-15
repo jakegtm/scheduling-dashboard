@@ -114,6 +114,8 @@ def build_html_email(
     tbd_projects: list,
     variance_issues: list,
     util_data: list        = None,
+    pto_schedule: dict     = None,
+    pto_months: list       = None,
     has_openair: bool      = False,
     no_openair_note: bool  = False,
     selected_months: list  = None,
@@ -223,6 +225,25 @@ def build_html_email(
                 + _table(["Utilization", "Goal", "Difference", "Chargeable Hrs", "Remaining Hrs"],
                           rows, response_col=False)
             )
+
+    # ── PTO Schedule ─────────────────────────────────────────
+    if pto_schedule and pto_months:
+        person_pto = pto_schedule.get(owner, {})
+        # Only include PTO table if person has at least one non-zero month
+        has_any_pto = any(person_pto.get(m, 0) for m in pto_months)
+        if person_pto and has_any_pto:
+            months_to_show = [m for m in pto_months if m in person_pto]
+            if months_to_show:
+                rows = [
+                    [m, f"{int(person_pto[m])} hrs" if person_pto.get(m) else "—"]
+                    for m in months_to_show
+                ]
+                sections.append(
+                    "<h3>Scheduled PTO</h3>"
+                    "<p>Your scheduled PTO for the current and next two months is shown below. "
+                    "Please reply if any updates are needed.</p>"
+                    + _table(["Month", "PTO Hours"], rows, response_col=True)
+                )
 
     if not sections:
         return ""
