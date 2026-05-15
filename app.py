@@ -37,8 +37,48 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 st.set_page_config(page_title="GTM Scheduling Analyzer",
                    layout="wide", page_icon="📊")
-st.title("📊 GTM Scheduling Analyzer")
-st.caption(f"Today: {datetime.now().strftime('%A, %B %d, %Y')}")
+
+st.markdown("""<style>
+[data-testid="metric-container"] {
+    background:#f8fafc; border:1px solid #e2e8f0;
+    border-radius:10px; padding:16px 20px;
+    box-shadow:0 1px 3px rgba(0,0,0,.06);
+}
+[data-testid="metric-container"] [data-testid="stMetricLabel"] {
+    font-size:13px; color:#64748b; font-weight:500;
+}
+[data-testid="metric-container"] [data-testid="stMetricValue"] {
+    font-size:28px; font-weight:700; color:#0E2841;
+}
+.stTabs [data-baseweb="tab-list"] {
+    gap:4px; background:#f1f5f9; border-radius:10px; padding:4px;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius:8px; padding:8px 20px; font-weight:500; color:#64748b;
+}
+.stTabs [aria-selected="true"] {
+    background:white !important; color:#0E2841 !important;
+    box-shadow:0 1px 3px rgba(0,0,0,.1);
+}
+[data-testid="stSidebar"] { background:#f8fafc; border-right:1px solid #e2e8f0; }
+[data-testid="stExpander"] { border:1px solid #e2e8f0 !important; border-radius:8px !important; }
+</style>""", unsafe_allow_html=True)
+
+import os as _os
+_logo_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "assets", "logo.png")
+if _os.path.exists(_logo_path):
+    try:
+        st.logo(_logo_path)
+    except Exception:
+        pass
+
+_hc1, _hc2 = st.columns([0.07, 0.93])
+with _hc1:
+    if _os.path.exists(_logo_path):
+        st.image(_logo_path, width=56)
+with _hc2:
+    st.markdown("## GTM Scheduling Analyzer")
+    st.caption(f"Today: {datetime.now().strftime('%A, %B %d, %Y')}")
 
 if not email_configured():
     st.warning("⚠️ **Email credentials not configured.** "
@@ -181,7 +221,7 @@ def get_sched_periods(file_hash, _b, active_month):
 @st.cache_data(show_spinner=False)
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
-                 _v="v7"):  # bump _v to bust stale cache after code changes
+                 _v="v8"):  # bump _v to bust stale cache after code changes
     wb = _load_wb(file_hash, _b)
     sched_sheet = next(
         (s for s in wb.sheetnames if s.lower().startswith(active_month[:3].lower())),
@@ -248,33 +288,54 @@ with st.sidebar:
         st.divider()
         st.subheader("📊 Variance Thresholds")
 
-        st.markdown("**📉 Scheduled but not worked**")
-        st.caption("Flag when scheduled hours exceed actual hours by more than this.")
-        _min_cur = float(st.session_state.settings["variance_min"])
-        _min_sl = st.slider("", min_value=0.0, max_value=20.0,
-            value=_min_cur, step=0.5, format="%.1f hrs",
-            label_visibility="collapsed", key="sl_var_min")
-        f_var_min = st.number_input("Exact (hrs):", min_value=0.0,
-            max_value=20.0, value=_min_sl, step=0.5, key="ni_var_min")
-
-        st.markdown("**📈 Worked but not scheduled**")
-        st.caption("Flag when actual hours exceed scheduled hours by more than this.")
-        _max_cur = float(st.session_state.settings["variance_max"])
-        _max_sl = st.slider("", min_value=0.0, max_value=20.0,
-            value=_max_cur, step=0.5, format="%.1f hrs",
-            label_visibility="collapsed", key="sl_var_max")
-        f_var_max = st.number_input("Exact (hrs):", min_value=0.0,
-            max_value=20.0, value=_max_sl, step=0.5, key="ni_var_max")
         applied = st.form_submit_button(
-            "✔ Apply Settings", type="primary", use_container_width=True)
+            "✔ Apply Budget Settings", type="primary", use_container_width=True)
 
     if applied:
-        st.session_state.settings = {
-            "budget_threshold":   float(f_budget),
-            "negative_threshold": float(f_negative),
-            "variance_min":       float(f_var_min),
-            "variance_max":       float(f_var_max),
-        }
+        st.session_state.settings["budget_threshold"]   = float(f_budget)
+        st.session_state.settings["negative_threshold"] = float(f_negative)
+        st.rerun()
+
+    st.divider()
+    st.subheader("📊 Variance Thresholds")
+
+    if "_vmin" not in st.session_state:
+        st.session_state._vmin = float(st.session_state.settings["variance_min"])
+    if "_vmax" not in st.session_state:
+        st.session_state._vmax = float(st.session_state.settings["variance_max"])
+
+    def _sync_sl_min(): st.session_state._vmin = st.session_state._sl_min
+    def _sync_ni_min():
+        st.session_state._vmin = st.session_state._ni_min
+        st.session_state._sl_min = st.session_state._ni_min
+    def _sync_sl_max(): st.session_state._vmax = st.session_state._sl_max
+    def _sync_ni_max():
+        st.session_state._vmax = st.session_state._ni_max
+        st.session_state._sl_max = st.session_state._ni_max
+
+    st.markdown("**📉 Scheduled but not actual**")
+    st.caption("Flag when scheduled hrs exceed actual hrs by more than:")
+    st.slider("", min_value=0.0, max_value=20.0, step=0.5, format="%.1f hrs",
+              value=st.session_state._vmin, key="_sl_min",
+              label_visibility="collapsed", on_change=_sync_sl_min)
+    st.number_input("Exact (hrs):", min_value=0.0, max_value=20.0, step=0.5,
+                    value=st.session_state._vmin, key="_ni_min", on_change=_sync_ni_min)
+
+    st.markdown("**📈 Actual but not scheduled**")
+    st.caption("Flag when actual hrs exceed scheduled hrs by more than:")
+    st.slider("", min_value=0.0, max_value=20.0, step=0.5, format="%.1f hrs",
+              value=st.session_state._vmax, key="_sl_max",
+              label_visibility="collapsed", on_change=_sync_sl_max)
+    st.number_input("Exact (hrs):", min_value=0.0, max_value=20.0, step=0.5,
+                    value=st.session_state._vmax, key="_ni_max", on_change=_sync_ni_max)
+
+    if st.button("✔ Apply Variance Settings", use_container_width=True, type="primary"):
+        st.session_state.settings["variance_min"] = st.session_state._vmin
+        st.session_state.settings["variance_max"] = st.session_state._vmax
+        st.session_state._sl_min = st.session_state._vmin
+        st.session_state._ni_min = st.session_state._vmin
+        st.session_state._sl_max = st.session_state._vmax
+        st.session_state._ni_max = st.session_state._vmax
         st.rerun()
 
     st.divider()
