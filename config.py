@@ -97,8 +97,15 @@ FIRST_NAMES = {
     "Wojtowicz":    "Agnes",
     "Brooks":       "Valerie",
     "Lighthall":    "Haley",
-    "Holmes (McGrogan)":     "Amanda",
+    "McGrogan":     "Amanda",
     "Avington":     "Alyssa",
+}
+
+# --- DISPLAY NAMES (optional override for recipient labels in the app) ---
+# Maps schedule key → display label shown in parentheses in the UI.
+# Use when someone's name in the schedule differs from their current name.
+DISPLAY_NAMES = {
+    "McGrogan": "Holmes",   # schedule uses maiden name; show married name in UI
 }
 
 # ============================================================
@@ -124,6 +131,6 @@ EMAIL_LOOKUP = {
     "Wojtowicz":    "awojtowicz@gtmtax.com",
     "Brooks":       "vbrooks@gtmtax.com",
     "Lighthall":    "hlighthall@gtmtax.com",
-    "Holmes (McGrogan)":     "aholmes@gtmtax.com",
+    "McGrogan":     "aholmes@gtmtax.com",
     "Avington":     "aavington@gtmtax.com",
 }
