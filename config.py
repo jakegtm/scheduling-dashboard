@@ -33,9 +33,18 @@ PURPLE_HEX_CODES = {
     "800080",
 }
 
+# --- NAME ALIASES ---
+# Maps ambiguous names (no initials) to their canonical form.
+# "O'Donnell" in older sheets has no initials — treat it as "J. O'Donnell".
+# Update when the file adds initials for everyone.
+NAME_ALIASES = {
+    "O'Donnell": "J. O'Donnell",
+}
+
 # --- FIRST NAMES (for email greetings) ---
 # Keys match exactly how names appear in the file (last name / "S. O'Donnell" style)
 FIRST_NAMES = {
+    "O'Donnell":    "Jake",
     "J. O'Donnell": "Jake",
     "S. O'Donnell": "Scott",
     "Sorrentino":   "Anthony",
