@@ -50,6 +50,13 @@ NAME_ALIASES = {
     "O'Donnell": "J. O'Donnell",
 }
 
+# Maps full OpenAir employee names ('LastName, FirstName') to the exact
+# name used in the schedule file. Only needed when last names are ambiguous.
+OPENAIR_EMPLOYEE_MAP = {
+    "O'Donnell, Jake":  "J. O'Donnell",
+    "O'Donnell, Scott": "S. O'Donnell",
+}
+
 # --- FIRST NAMES (for email greetings) ---
 # Keys match exactly how names appear in the file (last name / "S. O'Donnell" style)
 FIRST_NAMES = {
