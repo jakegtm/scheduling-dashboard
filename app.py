@@ -424,14 +424,20 @@ if available_months:
     st.subheader("📅 Variance Period Selection")
 
     def _period_label(p):
-        return f"🔮 {p} (future — no actuals yet)" if p in future_months else p
+        if p in future_months:
+            return f"🔮 {p} (future — no actuals yet)"
+        return p
 
     selected_months = st.multiselect(
         "Select period(s) for variance analysis:",
         options=available_months,
         default=default_months,
         format_func=_period_label,
-        help="🔮 = future. Default is current month periods.",
+        help=(
+            "All 24 half-month periods for the year are shown. "
+            "🔮 = future (scheduled hours only, actual = 0). "
+            "Past periods use OpenAir actuals if uploaded."
+        ),
     )
 
     if selected_months:
