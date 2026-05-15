@@ -180,7 +180,7 @@ def get_sched_periods(file_hash, _b, active_month):
 @st.cache_data(show_spinner=False)
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
-                 _v="v3"):  # bump _v to bust stale cache after code changes
+                 _v="v4"):  # bump _v to bust stale cache after code changes
     wb = _load_wb(file_hash, _b)
     sched_sheet = next(
         (s for s in wb.sheetnames if s.lower().startswith(active_month[:3].lower())),
@@ -204,7 +204,8 @@ def run_variance(file_hash, _b, oa_hash, _oa,
                     actual[person][proj] = {period: 0.0 for period in periods}
             filtered = filter_by_months(actual, list(selected_months_tuple))
         variances = compute_variances(filtered, sched,
-                                      min_diff=var_min, max_diff=var_max)
+                                      min_diff=var_min, max_diff=var_max,
+                                      selected_periods=list(selected_months_tuple))
         gc.collect()
         return variances, None
     except Exception as e:
