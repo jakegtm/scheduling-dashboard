@@ -23,7 +23,11 @@ DEFAULT_VARIANCE_MAX = 0    # Flag if difference >= this (actual > schedule)
 # --- ROLE RULES ---
 # Names of staff who only receive their own variance rows (not all team rows).
 # Add more names here as needed (e.g. when more analysts are hired).
-INTERN_NAMES = {"Avington"}
+INTERN_NAMES = {"Avington"}  # kept for backwards compatibility
+
+# Staff who only receive their own variance rows (not all project rows).
+# Project owners (managers/directors) are everyone NOT in this set.
+STAFF_NAMES = {"Avington", "S. O'Donnell", "J. O'Donnell", "McGrogan"}
 
 # Project code prefixes to exclude from variance analysis.
 # GTM internal/non-chargeable codes (NONCHG, TRAINING, HOLIDAYS, etc.) should not appear.
