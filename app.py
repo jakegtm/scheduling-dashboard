@@ -16,7 +16,7 @@ import streamlit.components.v1 as components
 
 from config import (
     SENDER_EMAIL, SENDER_NAMES, EMAIL_LOOKUP, INTERN_NAMES, STAFF_NAMES, NAME_ALIASES,
-    POSITION_ORDER, PERSON_ROLE, _rank,
+    POSITION_ORDER, PERSON_ROLE, _rank, DISPLAY_NAMES,
     DEFAULT_BUDGET_THRESHOLD, DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_PROJECTION_THRESHOLD_PCT,
     DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX,
@@ -853,7 +853,8 @@ for owner in all_owner_keys:
     data       = active_owners[owner]
     first_name = data.get("first_name", owner)
     email_str  = data.get("email") or "⚠️ no email"
-    label = (f"**{first_name} ({owner})** · {email_str} — "
+    _display = DISPLAY_NAMES.get(owner, owner)
+    label = (f"**{first_name} ({_display})** · {email_str} — "
              f"Tracker: {len(data['tracker'])} · "
              f"Budget: {len(data['budget'])} · "
              f"Util: {len(data['util'])} · "
