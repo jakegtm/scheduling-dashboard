@@ -124,6 +124,6 @@ EMAIL_LOOKUP = {
     "Wojtowicz":    "awojtowicz@gtmtax.com",
     "Brooks":       "vbrooks@gtmtax.com",
     "Lighthall":    "hlighthall@gtmtax.com",
-    "McGrogan":     "amcgrogan.com",
+    "McGrogan (Holmes)":     "aholmes@gtmtax.com",
     "Avington":     "aavington@gtmtax.com",
 }
