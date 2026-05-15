@@ -105,7 +105,7 @@ FIRST_NAMES = {
 # Maps schedule key → display label shown in parentheses in the UI.
 # Use when someone's name in the schedule differs from their current name.
 DISPLAY_NAMES = {
-    "McGrogan": "Holmes",   # schedule uses maiden name; show married name in UI
+    "McGrogan": "Holmes",   # schedule uses initial name; show new name in UI
 }
 
 # ============================================================
