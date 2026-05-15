@@ -6,6 +6,7 @@ from __future__ import annotations
 import urllib.request
 import urllib.error
 import json
+from datetime import date, timedelta
 import streamlit as st
 from config import SENDER_EMAIL, SENDER_NAMES
 
@@ -24,6 +25,18 @@ def _get_sender_name() -> str:
         from_email = SENDER_EMAIL
     return SENDER_NAMES.get(from_email,
            from_email.split("@")[0].split(".")[0].capitalize())
+
+
+def _next_monday() -> str:
+    """Return the coming Monday as a readable string, e.g. 'Monday, May 19'."""
+    today      = date.today()
+    days_ahead = (7 - today.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    monday = today + timedelta(days=days_ahead)
+    # %-d is Linux-only; use lstrip for portability
+    day = monday.strftime("%B %d").replace(" 0", " ")
+    return f"Monday, {day}"
 
 
 def email_configured() -> bool:
@@ -217,13 +230,23 @@ def build_html_email(
             else:
                 diff_str = "-"
 
+            # Question based on difference
+            if diff_pct is not None and diff_pct < -10:
+                util_question = "What are you working on? (non-chargeable hours)"
+            elif diff_pct is not None and diff_pct > 10:
+                util_question = "Do we need to reallocate work?"
+            else:
+                util_question = ""
+
             rows = [[util_str, goal_str, diff_str,
-                     str(u.get("chargeable", "-")), str(u.get("remaining", "-"))]]
+                     str(u.get("chargeable", "-")), str(u.get("remaining", "-")),
+                     util_question]]
             sections.append(
                 "<h3>Utilization</h3>"
                 "<p>Your current utilization for the month is shown below.</p>"
-                + _table(["Utilization", "Goal", "Difference", "Chargeable Hrs", "Remaining Hrs"],
-                          rows, response_col=False)
+                + _table(["Utilization", "Goal", "Difference", "Chargeable Hrs", "Remaining Hrs",
+                           "To be reviewed"],
+                          rows, response_col=True)
             )
 
     # ── PTO Schedule ─────────────────────────────────────────
@@ -248,9 +271,10 @@ def build_html_email(
     if not sections:
         return ""
 
+    deadline = _next_monday()
     return f"""<html><head>{_CSS}</head><body>
 <p>Hi {first_name},</p>
-<p>Please review the items below and reply with your updates.</p>
+<p>Please review the items below and reply to {sender_name} by <strong>{deadline} at 10:00 AM</strong>.</p>
 {"".join(sections)}
 <p class="sig">Best,<br>{sender_name}</p>
 </body></html>"""
