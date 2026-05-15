@@ -179,7 +179,8 @@ def get_sched_periods(file_hash, _b, active_month):
 
 @st.cache_data(show_spinner=False)
 def run_variance(file_hash, _b, oa_hash, _oa,
-                 selected_months_tuple, var_min, var_max, active_month):
+                 selected_months_tuple, var_min, var_max, active_month,
+                 _v="v3"):  # bump _v to bust stale cache after code changes
     wb = _load_wb(file_hash, _b)
     sched_sheet = next(
         (s for s in wb.sheetnames if s.lower().startswith(active_month[:3].lower())),
@@ -190,10 +191,18 @@ def run_variance(file_hash, _b, oa_hash, _oa,
     try:
         sched = read_schedule_hours(wb, sched_sheet)
         if oa_hash and _oa:
+            # Use real OpenAir actuals
             actual   = _parse_openair(oa_hash, _oa)
             filtered = filter_by_months(actual, list(selected_months_tuple))
         else:
-            filtered = {}   # no OpenAir → actuals all 0
+            # No OpenAir — build fake actual_data with 0s from the schedule
+            # so that any scheduled hours will produce a variance (actual=0).
+            actual = {}
+            for person, projects in sched.items():
+                actual[person] = {}
+                for proj, periods in projects.items():
+                    actual[person][proj] = {period: 0.0 for period in periods}
+            filtered = filter_by_months(actual, list(selected_months_tuple))
         variances = compute_variances(filtered, sched,
                                       min_diff=var_min, max_diff=var_max)
         gc.collect()
