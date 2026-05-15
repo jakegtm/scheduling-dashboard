@@ -7,7 +7,7 @@ import re
 from datetime import date, timedelta
 from collections import defaultdict
 
-from config import EMAIL_LOOKUP, FIRST_NAMES, DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX
+from config import EMAIL_LOOKUP, FIRST_NAMES, VARIANCE_EXCLUDE_PREFIXES, DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX
 
 
 # ================================================================
@@ -398,6 +398,7 @@ def compute_variances(
     Both bounds are inclusive (equal-to is flagged).
     """
     variances = []
+    _excl = {p.lower() for p in VARIANCE_EXCLUDE_PREFIXES}
 
     for person, actual_projects in actual_data.items():
         # Case-insensitive match to schedule person key
@@ -414,6 +415,8 @@ def compute_variances(
         sched_code_list = list(sched_projects.keys())
 
         for oa_project, actual_periods in actual_projects.items():
+            if any(oa_project.lower().startswith(p) for p in _excl):
+                continue
             matched_code  = _match_project(oa_project, sched_code_list)
             sched_periods = sched_projects.get(matched_code, {}) if matched_code else {}
 
