@@ -300,7 +300,7 @@ def build_html_email(
     deadline = _next_monday()
     return f"""<html><head>{_CSS}</head><body>
 <p>Hi {first_name},</p>
-<p>Please review the items below and reply to {sender_name} by <strong>{deadline} at 10:00 AM</strong>.</p>
+<p>Please review the items below and reply to <strong>Laren</strong> by <strong>{deadline} at 10:00 AM</strong>.</p>
 {"".join(sections)}
 <p class="sig">Best,<br>{sender_name}</p>
 </body></html>"""
