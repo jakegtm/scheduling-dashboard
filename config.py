@@ -6,7 +6,8 @@
 SENDER_EMAIL = "jodonnell@gtmtax.com"   # fallback if not in secrets
 
 SENDER_NAMES = {
-    "jodonnell@gtmtax.com": "Jake",
+    "jodonnell@gtmtax.com":    "Jake",
+    "lhendrickson@gtmtax.com": "Laren",
     # Add other senders here as needed
 }
 
