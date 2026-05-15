@@ -170,7 +170,7 @@ def _parse_openair(oa_hash: str, _oa_bytes: bytes) -> dict:
     return parse_openair_report(io.BytesIO(_oa_bytes))
 
 @st.cache_data(show_spinner=False)
-def run_budget(file_hash, _b, budget_thr, proj_pct, neg_thr):
+def run_budget(file_hash, _b, budget_thr, proj_pct, neg_thr, _v="v2"):  # bump to bust cache after logic changes
     wb    = _load_wb(file_hash, _b)
     sheet = _find_sheet(wb.sheetnames, ["budget to actual", "budget"])
     if not sheet:
