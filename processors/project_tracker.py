@@ -66,11 +66,13 @@ def _lookup_first(name: str) -> str:
 def process_project_tracker(ws) -> tuple:
     """
     Returns:
-        issues       — Known projects with any blank rate in J:Q
-        tbd_projects — TBD and Pending SOW projects (for reference / email section)
+        issues            — Known projects with any blank rate in J:Q
+        tbd_projects      — TBD and Pending SOW projects (for reference / email section)
+        project_owner_map — dict of {project_code: owner} for ALL projects (used for variance routing)
     """
-    issues       = []
-    tbd_projects = []
+    issues            = []
+    tbd_projects      = []
+    project_owner_map = {}
 
     for row in ws.iter_rows(min_row=2, values_only=True):
         row = list(row) + [None] * 10
@@ -87,6 +89,10 @@ def process_project_tracker(ws) -> tuple:
         code_str   = str(project_code).strip() if project_code else ""
         status_str = str(status).strip()        if status       else ""
         owner_str  = str(owner).strip()         if owner        else ""
+
+        # Always populate the owner map regardless of status
+        if code_str and owner_str:
+            project_owner_map[code_str] = owner_str
 
         # --- TBD / Pending SOW ---
         # Either the project code contains "TBD" OR the status is a TBD-like value
@@ -129,7 +135,7 @@ def process_project_tracker(ws) -> tuple:
                 "problems":      [f"Missing rate(s): {', '.join(missing_labels)}"],
             })
 
-    return issues, tbd_projects
+    return issues, tbd_projects, project_owner_map
 
 
 def build_tracker_emails(issues: list, tbd_projects: list,
