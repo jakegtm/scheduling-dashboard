@@ -292,16 +292,44 @@ def get_sched_periods(file_hash, _b, active_month):
 @st.cache_data(show_spinner=False)
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
-                 _v="v13"):  # bump _v to bust stale cache after code changes
+                 _v="v14"):  # bump _v to bust stale cache after code changes
     wb = _load_wb(file_hash, _b)
-    sched_sheet = next(
-        (s for s in wb.sheetnames if s.lower().startswith(active_month[:3].lower())),
-        None,
-    )
-    if not sched_sheet:
+
+    # Determine which month tabs to read based on selected periods.
+    # e.g. selecting "May 1-15" and "June 1-15" requires both May and June tabs.
+    import re as _re
+    needed_months = set()
+    for period in selected_months_tuple:
+        m = _re.match(r"([A-Za-z]+)", str(period))
+        if m:
+            needed_months.add(m.group(1).capitalize())
+    needed_months.add(active_month)  # always include current month as fallback
+
+    sheets_to_read = []
+    for month in needed_months:
+        sheet = next(
+            (s for s in wb.sheetnames if s.lower().startswith(month[:3].lower())),
+            None,
+        )
+        if sheet:
+            sheets_to_read.append(sheet)
+
+    if not sheets_to_read:
         return [], f"No sheet found for {active_month}"
+
     try:
-        sched = read_schedule_hours(wb, sched_sheet)
+        # Merge schedule data across all relevant month tabs
+        sched = {}
+        for sheet in sheets_to_read:
+            sheet_sched = read_schedule_hours(wb, sheet)
+            for person, projects in sheet_sched.items():
+                if person not in sched:
+                    sched[person] = {}
+                for proj, periods in projects.items():
+                    if proj not in sched[person]:
+                        sched[person][proj] = {}
+                    sched[person][proj].update(periods)
+
         if oa_hash and _oa:
             # Use real OpenAir actuals
             actual   = _parse_openair(oa_hash, _oa)
