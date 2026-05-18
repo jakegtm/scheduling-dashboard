@@ -242,10 +242,10 @@ def run_tracker(file_hash, _b):
     wb    = _load_wb(file_hash, _b)
     sheet = _find_sheet(wb.sheetnames, ["project tracker", "tracker"])
     if not sheet:
-        return [], [], None
-    issues, tbd = process_project_tracker(wb[sheet])
+        return [], [], None, {}
+    issues, tbd, owner_map = process_project_tracker(wb[sheet])
     gc.collect()
-    return issues, tbd, sheet
+    return issues, tbd, sheet, owner_map
 
 @st.cache_data(show_spinner=False)
 def run_utilization(file_hash, _b, month):
@@ -521,9 +521,9 @@ with st.spinner("🔄 Running analysis — please wait…") if _show_spinner els
     except Exception as e:
         st.warning(f"Budget error: {e}")
 
-    tracker_issues, tbd_projects, tracker_sheet_name = [], [], None
+    tracker_issues, tbd_projects, tracker_sheet_name, tracker_owner_map = [], [], None, {}
     try:
-        tracker_issues, tbd_projects, tracker_sheet_name = run_tracker(
+        tracker_issues, tbd_projects, tracker_sheet_name, tracker_owner_map = run_tracker(
             file_hash, sched_bytes)
     except Exception as e:
         st.warning(f"Tracker error: {e}")
@@ -654,13 +654,14 @@ for issue in budget_issues:
         owners_data[o]["first_name"] = issue.get("owner_first", o)
     owners_data[o]["budget"].append(issue)
 
-# Build project → owner map from tracker + budget data
-_project_owner_map = {}
-for _issue in tracker_issues:
-    _code  = str(_issue.get("project_code", "")).strip()
-    _owner = _normalize_name(_issue.get("owner", ""))
-    if _code and _owner:
-        _project_owner_map[_code] = _owner
+# Build project → owner map from the full tracker (all projects, not just flagged ones)
+# This ensures variance rows for staff on any project get routed to the correct project owner.
+_project_owner_map = {
+    code: _normalize_name(owner)
+    for code, owner in tracker_owner_map.items()
+    if code and owner
+}
+# Also fold in budget issues as a fallback for any codes not in tracker
 for _issue in budget_issues:
     _code  = str(_issue.get("project_code", "")).strip()
     _owner = _normalize_name(_issue.get("owner", ""))
