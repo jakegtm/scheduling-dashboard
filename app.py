@@ -289,7 +289,6 @@ def get_sched_periods(file_hash, _b, active_month):
         return [], []
     return get_schedule_periods(wb, sheet)
 
-@st.cache_data(show_spinner=False)
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
                  _v="v14"):  # bump _v to bust stale cache after code changes
