@@ -101,6 +101,7 @@ def process_project_tracker(ws) -> tuple:
             or status_str.lower() in TBD_STATUSES
         )
         if is_tbd:
+            notes_val = row[3] if len(row) > 3 else None
             tbd_projects.append({
                 "client":       client,
                 "project_code": code_str,
@@ -109,6 +110,7 @@ def process_project_tracker(ws) -> tuple:
                 "owner_email":  _lookup_email(owner_str),
                 "owner_first":  _lookup_first(owner_str),
                 "budget":       budget or 0.0,
+                "notes":        str(notes_val).strip() if notes_val else "",
             })
             continue
 
