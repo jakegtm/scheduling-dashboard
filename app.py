@@ -12,6 +12,7 @@ from datetime import datetime
 
 import openpyxl
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 from config import (
@@ -943,7 +944,7 @@ for owner in sorted(st.session_state.selected_owners, key=_rank):
     })
 
     with st.expander(f"👁 {first_name} ({DISPLAY_NAMES.get(owner, owner)}) · {person_email}"):
-        st.iframe(html, height=500, scrolling=True)
+        components.html(html, height=500, scrolling=True)
 
 # ---- Send buttons ----
 st.divider()
