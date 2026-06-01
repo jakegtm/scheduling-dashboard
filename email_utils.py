@@ -185,13 +185,14 @@ def build_html_email(
         rows = [
             [p.get("project_code", ""),
              p.get("status", "TBD"),
-             f"${p.get('budget', 0):,.0f}" if p.get("budget") else "TBD"]
+             f"${p.get('budget', 0):,.0f}" if p.get("budget") else "TBD",
+             p.get("notes", "")]
             for p in owner_tbd
         ]
         sections.append(
             "<h3>TBD / Pending SOW Projects</h3>"
             "<p>Please provide an update on the below projects.</p>"
-            + _table(["Project Code", "Status", "Budget"], rows, response_col=True)
+            + _table(["Project Code", "Status", "Budget", "Notes"], rows, response_col=True)
         )
 
     # ── Variance ─────────────────────────────────────────────
