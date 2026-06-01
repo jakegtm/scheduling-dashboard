@@ -28,11 +28,10 @@ def _get_sender_name() -> str:
 
 
 def _next_monday() -> str:
-    """Return the coming Monday as a readable string, e.g. 'Monday, May 19'."""
+    """Return the coming Monday as a readable string, e.g. 'Monday, June 1'.
+    If today is Monday, returns today."""
     today      = date.today()
-    days_ahead = (7 - today.weekday()) % 7
-    if days_ahead == 0:
-        days_ahead = 7
+    days_ahead = (7 - today.weekday()) % 7  # 0 if today is Monday
     monday = today + timedelta(days=days_ahead)
     # %-d is Linux-only; use lstrip for portability
     day = monday.strftime("%B %d").replace(" 0", " ")
