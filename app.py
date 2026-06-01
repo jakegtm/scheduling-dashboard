@@ -754,7 +754,8 @@ with tab1:
                 st.dataframe(
                     [{"Client": p.get("client",""), "Project Code": p.get("project_code",""),
                       "Status": p.get("status","TBD"), "Owner": p.get("owner",""),
-                      "Budget": f"${p.get('budget',0):,.0f}"}
+                      "Budget": f"${p.get('budget',0):,.0f}",
+                      "Notes": p.get("notes", "")}
                      for p in tbd_projects],
                     use_container_width=True, hide_index=True)
         if not tracker_issues:
