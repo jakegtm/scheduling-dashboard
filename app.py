@@ -12,7 +12,7 @@ from datetime import datetime
 
 import openpyxl
 import streamlit as st
-import streamlit.components.v1 as components
+
 
 from config import (
     SENDER_EMAIL, SENDER_NAMES, EMAIL_LOOKUP, INTERN_NAMES, STAFF_NAMES, NAME_ALIASES,
@@ -427,7 +427,7 @@ with st.sidebar:
 
     st.markdown("**📉 Scheduled but not actual**")
     st.caption("Flag when scheduled hrs exceed actual hrs by more than:")
-    st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
+    st.slider("Scheduled but not actual threshold", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
               value=min(st.session_state._vmin, 50.0), key="_sl_min",
               label_visibility="collapsed", on_change=_sl_min_changed)
     st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
@@ -436,7 +436,7 @@ with st.sidebar:
 
     st.markdown("**📈 Actual but not scheduled**")
     st.caption("Flag when actual hrs exceed scheduled hrs by more than:")
-    st.slider("", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
+    st.slider("Actual but not scheduled threshold", min_value=0.0, max_value=50.0, step=0.5, format="%.1f hrs",
               value=min(st.session_state._vmax, 50.0), key="_sl_max",
               label_visibility="collapsed", on_change=_sl_max_changed)
     st.number_input("Exact (hrs):", min_value=0.0, step=0.5,
@@ -943,7 +943,7 @@ for owner in sorted(st.session_state.selected_owners, key=_rank):
     })
 
     with st.expander(f"👁 {first_name} ({DISPLAY_NAMES.get(owner, owner)}) · {person_email}"):
-        components.html(html, height=500, scrolling=True)
+        st.iframe(html, height=500, scrolling=True)
 
 # ---- Send buttons ----
 st.divider()
