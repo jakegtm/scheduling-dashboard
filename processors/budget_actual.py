@@ -20,8 +20,8 @@ from config import EMAIL_LOOKUP, FIRST_NAMES
 COL_CLIENT    = 1   # A
 COL_CODE      = 2   # B
 COL_STATUS    = 3   # C
-COL_OWNER     = 8   # H
-COL_BUDGET    = 9   # I
+COL_OWNER     = 9   # I — Project Owner (col H is Client Owner, ignored)
+COL_BUDGET    = 10  # J
 COL_REMAINING = 12  # L
 
 
