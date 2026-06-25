@@ -701,23 +701,17 @@ for v in variance_issues:
     project_code = v.get("project_code", "")
     proj_owner   = _normalize_name(_project_owner_map.get(project_code, ""))
 
-    # Staff members get their OWN variance rows in their personal email
-    if person in STAFF_NAMES and person and (not valid_people or person in valid_people):
+    # Everyone gets their OWN variance rows in their personal email
+    if person and (not valid_people or person in valid_people):
         if not owners_data[person]["email"]:
             owners_data[person]["email"] = _lookup_email(person)
         owners_data[person]["variance"].append(v)
 
-    # Project owner gets ALL rows for their projects (including staff rows)
-    if proj_owner and proj_owner not in STAFF_NAMES and (not valid_people or proj_owner in valid_people):
+    # Project owner also gets ALL rows for their projects (including other staff rows)
+    if proj_owner and proj_owner not in STAFF_NAMES and proj_owner != person and (not valid_people or proj_owner in valid_people):
         if not owners_data[proj_owner]["email"]:
             owners_data[proj_owner]["email"] = _lookup_email(proj_owner)
         owners_data[proj_owner]["variance"].append(v)
-    elif not proj_owner and person not in STAFF_NAMES:
-        # No project owner found — fallback to person themselves
-        if person and (not valid_people or person in valid_people):
-            if not owners_data[person]["email"]:
-                owners_data[person]["email"] = _lookup_email(person)
-            owners_data[person]["variance"].append(v)
 
 for u in util_data:
     p = _normalize_name(u.get("person", ""))
