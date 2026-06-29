@@ -23,10 +23,11 @@ from config import EMAIL_LOOKUP, FIRST_NAMES
 COL_CLIENT      = 1   # A
 COL_CODE        = 2   # B
 COL_STATUS      = 3   # C
-COL_OWNER       = 8   # H
-COL_BUDGET      = 9   # I
-COL_RATES_START = 10  # J — Intern
-COL_RATES_END   = 17  # Q — Managing Director
+COL_NOTES       = 5   # E
+COL_OWNER       = 9   # I — Project Owner (col H is Client Owner, ignored)
+COL_BUDGET      = 10  # J
+COL_RATES_START = 11  # K — Intern
+COL_RATES_END   = 18  # R — Managing Director
 
 RATE_LABELS = [
     "Intern", "Analyst", "Senior Analyst", "Supervisor",
@@ -101,7 +102,7 @@ def process_project_tracker(ws) -> tuple:
             or status_str.lower() in TBD_STATUSES
         )
         if is_tbd:
-            notes_val = row[3] if len(row) > 3 else None
+            notes_val = row[COL_NOTES - 1] if len(row) >= COL_NOTES else None
             tbd_projects.append({
                 "client":       client,
                 "project_code": code_str,
