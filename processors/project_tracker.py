@@ -20,11 +20,21 @@ from __future__ import annotations
 from collections import defaultdict
 from config import EMAIL_LOOKUP, FIRST_NAMES
 
+# ============================================================
+# Column layout (verified against real file):
+#   A(1):  Client
+#   B(2):  Project Code
+#   C(3):  Status  <- filter to Known only
+#   I(9):  Project Owner  <- email target (H is Client Owner, ignored)
+#   J(10): Budget Amount
+#   L(12): Remaining  <- flag if negative OR too high
+# ============================================================
+
 COL_CLIENT      = 1   # A
 COL_CODE        = 2   # B
 COL_STATUS      = 3   # C
 COL_NOTES       = 5   # E
-COL_OWNER       = 9   # I — Project Owner (col H is Client Owner, ignored)
+COL_OWNER       = 9   # I — Project Owner
 COL_BUDGET      = 10  # J
 COL_RATES_START = 11  # K — Intern
 COL_RATES_END   = 18  # R — Managing Director
