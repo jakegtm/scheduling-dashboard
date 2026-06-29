@@ -4,31 +4,21 @@ from __future__ import annotations
 # ============================================================
 # Column layout (verified against real file):
 #   A(1):  Client
-#   B(2):  Project Code   <- "TBD" check here
-#   C(3):  Status         <- filter to Known only
-#   H(8):  Project Owner  <- email target
-#   I(9):  Budget
-#   J-Q (10-17): Rates (Intern → Managing Director)
+#   B(2):  Project Code
+#   C(3):  Status         <- filter to Known / TBD / Pending SOW
+#   E(5):  Notes
+#   I(9):  Project Owner  <- email target (H is Client Owner, ignored)
+#   J(10): Budget
+#   K-R (11-18): Rates (Intern → Managing Director)
 #
 # Rules:
-#   - TBD (project code contains "TBD") → collect separately
-#   - Pending SOW (status is "Pending SOW") → treat same as TBD
+#   - TBD or Pending SOW (status only) → collect in TBD list
 #   - Known non-TBD → check for missing rates; flag if any are blank
 #   - All other statuses (Unknown, Closed, blank) → skip
 # ============================================================
 
 from collections import defaultdict
 from config import EMAIL_LOOKUP, FIRST_NAMES
-
-# ============================================================
-# Column layout (verified against real file):
-#   A(1):  Client
-#   B(2):  Project Code
-#   C(3):  Status  <- filter to Known only
-#   I(9):  Project Owner  <- email target (H is Client Owner, ignored)
-#   J(10): Budget Amount
-#   L(12): Remaining  <- flag if negative OR too high
-# ============================================================
 
 COL_CLIENT      = 1   # A
 COL_CODE        = 2   # B
@@ -44,7 +34,7 @@ RATE_LABELS = [
     "Manager", "Senior Manager", "Director", "Managing Director",
 ]
 
-# Statuses that are treated the same as TBD (excluded from rate checks,
+# Statuses that are treated as TBD (excluded from rate checks,
 # included in the TBD/Pending SOW email section)
 TBD_STATUSES = {"tbd", "pending sow"}
 
@@ -77,7 +67,7 @@ def _lookup_first(name: str) -> str:
 def process_project_tracker(ws) -> tuple:
     """
     Returns:
-        issues            — Known projects with any blank rate in J:Q
+        issues            — Known projects with any blank rate in K:R
         tbd_projects      — TBD and Pending SOW projects (for reference / email section)
         project_owner_map — dict of {project_code: owner} for ALL projects (used for variance routing)
     """
@@ -105,20 +95,18 @@ def process_project_tracker(ws) -> tuple:
         if code_str and owner_str:
             project_owner_map[code_str] = owner_str
 
-        # --- TBD / Pending SOW ---
-        # Either the project code contains "TBD" OR the status is a TBD-like value
-        is_tbd = status_str.lower() in TBD_STATUSES
-        if is_tbd:
-            notes_val = row[4] if len(row) > 4 else None
-                tbd_projects.append({
-                    "client":       client,
-                    "project_code": code_str,
-                    "status":       status_str,
-                    "owner":        owner_str,
-                    "owner_email":  _lookup_email(owner_str),
-                    "owner_first":  _lookup_first(owner_str),
-                    "budget":       budget or 0.0,
-                    "notes":        str(notes_val).strip() if notes_val else "",
+        # --- TBD / Pending SOW --- filter by status only
+        if status_str.lower() in TBD_STATUSES:
+            notes_val = row[COL_NOTES - 1] if len(row) >= COL_NOTES else None
+            tbd_projects.append({
+                "client":       client,
+                "project_code": code_str,
+                "status":       status_str,
+                "owner":        owner_str,
+                "owner_email":  _lookup_email(owner_str),
+                "owner_first":  _lookup_first(owner_str),
+                "budget":       budget or 0.0,
+                "notes":        str(notes_val).strip() if notes_val else "",
             })
             continue
 
@@ -126,7 +114,7 @@ def process_project_tracker(ws) -> tuple:
         if status_str.lower() != "known":
             continue
 
-        # Check for any blank rate in J:Q
+        # Check for any blank rate in K:R
         rate_values = row[COL_RATES_START - 1: COL_RATES_END]
         missing_labels = [
             label for label, val in zip(RATE_LABELS, rate_values)
@@ -155,7 +143,6 @@ def build_tracker_emails(issues: list, tbd_projects: list,
       - Missing rates section (from issues)
       - TBD / Pending SOW section (from tbd_projects)
     """
-    # Group by owner
     owner_issues = defaultdict(list)
     for issue in issues:
         owner_issues[issue["owner"]].append(issue)
@@ -168,7 +155,6 @@ def build_tracker_emails(issues: list, tbd_projects: list,
     emails = []
 
     for owner in all_owners:
-        # Find email
         email = None
         if owner_issues[owner]:
             email = owner_issues[owner][0].get("owner_email")
@@ -180,7 +166,6 @@ def build_tracker_emails(issues: list, tbd_projects: list,
         first = _lookup_first(owner)
         sections = []
 
-        # Missing rates
         if owner_issues[owner]:
             lines = [
                 "The following projects assigned to you are missing billing rates. "
@@ -193,7 +178,6 @@ def build_tracker_emails(issues: list, tbd_projects: list,
                 )
             sections.append("\n".join(lines))
 
-        # TBD / Pending SOW
         if owner_tbd[owner]:
             lines = [
                 "The following projects currently have TBD or Pending SOW budgets. "
