@@ -108,17 +108,17 @@ def process_project_tracker(ws) -> tuple:
         # --- TBD / Pending SOW ---
         # Either the project code contains "TBD" OR the status is a TBD-like value
         is_tbd = status_str.lower() in TBD_STATUSES
-if is_tbd:
-    notes_val = row[4] if len(row) > 4 else None
-            tbd_projects.append({
-                "client":       client,
-                "project_code": code_str,
-                "status":       status_str,
-                "owner":        owner_str,
-                "owner_email":  _lookup_email(owner_str),
-                "owner_first":  _lookup_first(owner_str),
-                "budget":       budget or 0.0,
-                "notes":        str(notes_val).strip() if notes_val else "",
+        if is_tbd:
+            notes_val = row[4] if len(row) > 4 else None
+                tbd_projects.append({
+                    "client":       client,
+                    "project_code": code_str,
+                    "status":       status_str,
+                    "owner":        owner_str,
+                    "owner_email":  _lookup_email(owner_str),
+                    "owner_first":  _lookup_first(owner_str),
+                    "budget":       budget or 0.0,
+                    "notes":        str(notes_val).strip() if notes_val else "",
             })
             continue
 
