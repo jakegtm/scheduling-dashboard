@@ -195,7 +195,7 @@ def build_person_workbook(
     if no_openair_note:
         cover.cell(row=next_row, column=1,
                    value="Note: No OpenAir report was uploaded, so actual hours are shown as 0 "
-                         "on the Variance tab. Scheduled hours reflect what is planned."
+                         "on the Current Month Hours tab. Scheduled hours reflect what is planned."
                    ).font = _note_font
     cover.column_dimensions["A"].width = 95
     cover.page_setup.orientation = "landscape"
@@ -240,7 +240,7 @@ def build_person_workbook(
         _write_sheet(wb, "TBD Projects", ["Project Code", "Status", "Budget", "Notes"], rows)
         any_section = True
 
-    # ── Variance ──────────────────────────────────────────────
+    # ── Current Month Hours (all hours, flagged + matches) ──────
     if variance_issues:
         _sorted_var = sorted(
             variance_issues,
@@ -250,31 +250,48 @@ def build_person_workbook(
                 v.get("project_code", ""),
             )
         )
-        rows, diffs = [], []
+        rows, diffs, is_variance_flags = [], [], []
         for v in _sorted_var:
             diff = v.get("difference", 0)
+            is_var = v.get("is_variance", True)  # default True = old callers/back-compat
             diffs.append(diff)
+            is_variance_flags.append(is_var)
+            review_text = v.get("question", "") if is_var else "✓ Hours match — no action needed"
             if is_staff:
                 rows.append([
                     v.get("project_code", ""), v.get("period", ""),
                     v.get("actual_hours", ""), v.get("sched_hours", ""),
-                    diff, v.get("question", ""),
+                    diff, review_text,
                 ])
             else:
                 rows.append([
                     v.get("person", ""), v.get("project_code", ""), v.get("period", ""),
                     v.get("actual_hours", ""), v.get("sched_hours", ""),
-                    diff, v.get("question", ""),
+                    diff, review_text,
                 ])
         headers = (
             ["Project Code", "Period", "Actual Hrs", "Scheduled Hrs", "Difference", "To be reviewed"]
             if is_staff else
             ["Person", "Project Code", "Period", "Actual Hrs", "Scheduled Hrs", "Difference", "To be reviewed"]
         )
-        diff_col = 5 if is_staff else 6
-        ws = _write_sheet(wb, "Variance", headers, rows)
-        for idx, diff in enumerate(diffs, start=2):
-            ws.cell(row=idx, column=diff_col).font = _OVER_FONT if diff < 0 else _NEG_FONT
+        diff_col     = 5 if is_staff else 6
+        response_col = len(headers) + 1  # _write_sheet appends "Response" as the last column
+        ws = _write_sheet(wb, "Current Month Hours", headers, rows)
+
+        _optional_font = Font(name="Arial", size=10, italic=True, color="999999")
+        for r_offset, (diff, is_var) in enumerate(zip(diffs, is_variance_flags)):
+            row_idx = r_offset + 2
+            ws.cell(row=row_idx, column=diff_col).font = (
+                (_OVER_FONT if diff < 0 else _NEG_FONT) if is_var else _POS_FONT
+            )
+            if not is_var:
+                # Non-flagged row: make the Response cell read as optional —
+                # pre-filled hint text, no yellow tint, matching the row's
+                # normal zebra/white background instead.
+                resp_cell = ws.cell(row=row_idx, column=response_col)
+                resp_cell.value = "Optional"
+                resp_cell.font  = _optional_font
+                resp_cell.fill  = _ZEBRA_FILL if (r_offset % 2 == 1) else PatternFill(fill_type=None)
         any_section = True
 
     # ── Utilization ───────────────────────────────────────────
