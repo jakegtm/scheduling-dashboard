@@ -7,6 +7,7 @@ import gc
 import hashlib
 import io
 import warnings
+import zipfile
 from collections import defaultdict
 from datetime import datetime
 
@@ -953,38 +954,46 @@ for person in selected_payload:
 st.divider()
 all_payload = _build_payload(all_owner_keys)
 
+# ---- Generate & download (single click — no separate "Generate" step) ----
+st.divider()
+all_payload = _build_payload(all_owner_keys)
+
+with st.spinner("Building workbooks…"):
+    selected_zip_bytes = build_reports_zip(selected_payload) if selected_payload else b""
+    all_zip_bytes      = build_reports_zip(all_payload) if all_payload else b""
+
+
+def _included_count(zip_bytes: bytes) -> int:
+    """How many workbooks actually ended up in the zip (people with no
+    applicable data are silently skipped by build_reports_zip)."""
+    if not zip_bytes:
+        return 0
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        return len(zf.namelist())
+
+
 col_b1, col_b2 = st.columns(2)
 with col_b1:
-    gen_selected = st.button(
-        f"📦 Generate ZIP — Selected ({len(selected_payload)})",
-        type="primary", key="gen_selected", disabled=not selected_payload,
-        use_container_width=True)
-with col_b2:
-    gen_all = st.button(
-        f"📦 Generate ZIP — All ({len(all_payload)})",
-        key="gen_all", disabled=not all_payload,
-        use_container_width=True)
-
-if gen_selected:
-    with st.spinner(f"Building {len(selected_payload)} workbook(s)…"):
-        st.session_state["_zip_bytes_selected"] = build_reports_zip(selected_payload)
-if gen_all:
-    with st.spinner(f"Building {len(all_payload)} workbook(s)…"):
-        st.session_state["_zip_bytes_all"] = build_reports_zip(all_payload)
-
-if st.session_state.get("_zip_bytes_selected"):
+    n_included = _included_count(selected_zip_bytes)
     st.download_button(
-        "⬇️ Download Selected Reports (ZIP)",
-        data=st.session_state["_zip_bytes_selected"],
+        f"⬇️ Download Selected Reports ({n_included}/{len(selected_payload)})",
+        data=selected_zip_bytes,
         file_name=f"scheduling_reports_selected_{datetime.now().strftime('%Y%m%d')}.zip",
         mime="application/zip",
+        disabled=not selected_payload,
+        type="primary",
         use_container_width=True,
     )
-if st.session_state.get("_zip_bytes_all"):
+    if selected_payload and n_included < len(selected_payload):
+        st.caption(f"{len(selected_payload) - n_included} selected "
+                   f"person(s) had no applicable data and were skipped.")
+with col_b2:
+    n_included_all = _included_count(all_zip_bytes)
     st.download_button(
-        "⬇️ Download All Reports (ZIP)",
-        data=st.session_state["_zip_bytes_all"],
+        f"⬇️ Download All Reports ({n_included_all}/{len(all_payload)})",
+        data=all_zip_bytes,
         file_name=f"scheduling_reports_all_{datetime.now().strftime('%Y%m%d')}.zip",
         mime="application/zip",
+        disabled=not all_payload,
         use_container_width=True,
     )
