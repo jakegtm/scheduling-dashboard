@@ -9,16 +9,43 @@ import zipfile
 from datetime import date, timedelta
 
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.properties import PageSetupProperties
 
 from config import _rank
 
-_HEADER_FILL = PatternFill(start_color="0E2841", end_color="0E2841", fill_type="solid")
-_HEADER_FONT = Font(color="FFFFFF", bold=True)
-_NEG_FONT    = Font(color="C0392B", bold=True)   # over-budget / worked-less-than-scheduled
-_OVER_FONT   = Font(color="E67E22", bold=True)   # worked-more-than-scheduled
-_POS_FONT    = Font(color="1A6B2F")              # on-track / positive
+_BRAND       = "0E2841"
+_HEADER_FILL = PatternFill(start_color=_BRAND, end_color=_BRAND, fill_type="solid")
+_ZEBRA_FILL  = PatternFill(start_color="F5F7FA", end_color="F5F7FA", fill_type="solid")
+_RESP_FILL   = PatternFill(start_color="FFFBE6", end_color="FFFBE6", fill_type="solid")
+
+_HEADER_FONT = Font(name="Arial", color="FFFFFF", bold=True, size=11)
+_BODY_FONT   = Font(name="Arial", size=10.5)
+_NEG_FONT    = Font(name="Arial", color="C0392B", bold=True, size=10.5)  # over-budget / worked-less-than-scheduled
+_OVER_FONT   = Font(name="Arial", color="E67E22", bold=True, size=10.5)  # worked-more-than-scheduled
+_POS_FONT    = Font(name="Arial", color="1A6B2F", size=10.5)             # on-track / positive
+
+_THIN   = Side(style="thin", color="D9D9D9")
+_BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+
+_LEFT_TOP    = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
+_LEFT_MID    = Alignment(horizontal="left",   vertical="center", wrap_text=False)
+_CENTER_MID  = Alignment(horizontal="center", vertical="center", wrap_text=False)
+
+# Columns that hold long free-text and should wrap instead of stretching forever
+_WRAP_HEADERS = {"To be reviewed", "Notes", "Response"}
+# Columns that read better centered (short numbers/labels)
+_CENTER_HEADERS = {
+    "Actual Hrs", "Scheduled Hrs", "Difference", "Chargeable Hrs",
+    "Remaining Hrs", "Utilization", "Goal", "PTO Hours", "Status", "Budget",
+}
+_NUMERIC_HEADERS = {"Actual Hrs", "Scheduled Hrs", "Difference"}
+
+_MIN_WIDTH      = 10
+_MAX_WIDTH      = 32
+_MAX_WRAP_WIDTH = 48
+_CHARS_PER_LINE = 46  # used to estimate wrapped row height
 
 
 def _next_monday() -> str:
@@ -30,37 +57,93 @@ def _next_monday() -> str:
     return f"Monday, {day}"
 
 
-def _write_sheet(wb, title, headers, rows, response_col=True, col_widths=None):
-    """Create a sheet, write a styled header row, then the data rows.
-    Returns the worksheet so callers can apply extra per-cell styling."""
-    ws = wb.create_sheet(title=title[:31])  # Excel sheet-name length limit
-    all_headers = list(headers) + (["Response"] if response_col else [])
-    ws.append(all_headers)
-    for col_idx in range(1, len(all_headers) + 1):
-        cell = ws.cell(row=1, column=col_idx)
-        cell.fill = _HEADER_FILL
-        cell.font = _HEADER_FONT
+def _autofit_widths(all_headers: list, display_rows: list) -> list:
+    """Compute a sensible column width per header based on actual content,
+    capped so a single long note doesn't blow out the whole sheet."""
+    widths = []
+    for col_idx, header in enumerate(all_headers):
+        max_len = len(str(header))
+        for row in display_rows:
+            val = row[col_idx] if col_idx < len(row) else ""
+            text = "" if val is None else str(val)
+            max_len = max(max_len, len(text))
+        cap = _MAX_WRAP_WIDTH if header in _WRAP_HEADERS else _MAX_WIDTH
+        widths.append(min(cap, max(_MIN_WIDTH, max_len + 2)))
+    return widths
 
+
+def _write_sheet(wb, title, headers, rows, response_col=True):
+    """Create a sheet, write a styled + autofit + zebra-striped table.
+    Returns the worksheet so callers can layer extra per-cell styling
+    (e.g. coloring a specific "Difference" cell red/orange) on top."""
+    ws = wb.create_sheet(title=title[:31])  # Excel sheet-name length limit
+    ws.sheet_properties.tabColor = _BRAND
+    all_headers = list(headers) + (["Response"] if response_col else [])
+    n_cols = len(all_headers)
+
+    # ── header row ──
+    ws.append(all_headers)
+    ws.row_dimensions[1].height = 20
+    for col_idx in range(1, n_cols + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill      = _HEADER_FILL
+        cell.font      = _HEADER_FONT
+        cell.border    = _BORDER
+        cell.alignment = _LEFT_MID
+
+    # ── data rows ──
+    display_rows = []
     for row in rows:
         row_values = list(row)
         if response_col:
             row_values.append("")  # blank cell for the person to fill in
+        display_rows.append(row_values)
         ws.append(row_values)
 
-    widths = col_widths or [18] * len(all_headers)
-    for i, w in enumerate(widths[:len(all_headers)], start=1):
+    widths = _autofit_widths(all_headers, display_rows)
+
+    for r_offset, row_values in enumerate(display_rows):
+        row_idx  = r_offset + 2
+        is_even  = (r_offset % 2 == 1)
+        max_lines = 1
+        for col_idx in range(1, n_cols + 1):
+            header = all_headers[col_idx - 1]
+            cell   = ws.cell(row=row_idx, column=col_idx)
+            cell.font   = _BODY_FONT
+            cell.border = _BORDER
+
+            if header in _WRAP_HEADERS:
+                cell.alignment = _LEFT_TOP
+                text = "" if cell.value is None else str(cell.value)
+                if text:
+                    max_lines = max(max_lines, -(-len(text) // _CHARS_PER_LINE))
+            elif header in _CENTER_HEADERS:
+                cell.alignment = _CENTER_MID
+            else:
+                cell.alignment = _LEFT_MID
+
+            if header in _NUMERIC_HEADERS and isinstance(cell.value, (int, float)):
+                cell.number_format = "#,##0.0;-#,##0.0;0"
+
+            if header == "Response":
+                cell.fill = _RESP_FILL
+            elif is_even:
+                cell.fill = _ZEBRA_FILL
+
+        ws.row_dimensions[row_idx].height = max(15, max_lines * 15)
+
+    for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
-    if response_col:
-        # widen + tint the response column so it's obvious where to type
-        resp_col_idx = len(all_headers)
-        ws.column_dimensions[get_column_letter(resp_col_idx)].width = max(
-            widths[resp_col_idx - 1] if resp_col_idx <= len(widths) else 18, 25
-        )
-        resp_fill = PatternFill(start_color="FFFBE6", end_color="FFFBE6", fill_type="solid")
-        for row_idx in range(2, ws.max_row + 1):
-            ws.cell(row=row_idx, column=resp_col_idx).fill = resp_fill
 
     ws.freeze_panes = "A2"
+
+    # Print-friendly: landscape + fit-to-width so a wide table doesn't spill
+    # across multiple pages if someone prints or exports this to PDF.
+    ws.page_setup.orientation = "landscape"
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    ws.page_setup.fitToWidth  = 1
+    ws.page_setup.fitToHeight = 0
+
     return ws
 
 
@@ -93,20 +176,32 @@ def build_person_workbook(
 
     # ── Summary / cover sheet ────────────────────────────────
     cover = wb.create_sheet("Summary")
+    cover.sheet_properties.tabColor = _BRAND
     cover["A1"] = f"Scheduling Review — {first_name}"
-    cover["A1"].font = Font(bold=True, size=14, color="0E2841")
+    cover["A1"].font = Font(name="Arial", bold=True, size=16, color=_BRAND)
+    cover.row_dimensions[1].height = 26
+
     deadline = _next_monday()
     cover["A3"] = f"Please review the applicable tabs and reply/update by {deadline} at 12:00 PM."
+    cover["A3"].font = Font(name="Arial", size=11, italic=True, color="444444")
+
     next_row = 5
+    _note_font = Font(name="Arial", size=10.5, color="555555")
     if selected_months and len(selected_months) > 1:
         cover.cell(row=next_row, column=1,
-                   value=f"Note: this report covers multiple periods: {', '.join(selected_months)}")
+                   value=f"Note: this report covers multiple periods: {', '.join(selected_months)}"
+                   ).font = _note_font
         next_row += 2
     if no_openair_note:
         cover.cell(row=next_row, column=1,
                    value="Note: No OpenAir report was uploaded, so actual hours are shown as 0 "
-                         "on the Variance tab. Scheduled hours reflect what is planned.")
-    cover.column_dimensions["A"].width = 100
+                         "on the Variance tab. Scheduled hours reflect what is planned."
+                   ).font = _note_font
+    cover.column_dimensions["A"].width = 95
+    cover.page_setup.orientation = "landscape"
+    cover.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    cover.page_setup.fitToWidth  = 1
+    cover.page_setup.fitToHeight = 0
 
     # ── Project Tracker ──────────────────────────────────────
     if tracker_issues:
@@ -119,8 +214,7 @@ def build_person_workbook(
                 for prob in i.get("problems", []):
                     rows.append([i.get("project_code", ""), prob])
         if rows:
-            _write_sheet(wb, "Project Tracker", ["Project Code", "To be reviewed"], rows,
-                         col_widths=[20, 55])
+            _write_sheet(wb, "Project Tracker", ["Project Code", "To be reviewed"], rows)
             any_section = True
 
     # ── Budget to Actual ─────────────────────────────────────
@@ -129,8 +223,7 @@ def build_person_workbook(
         for i in budget_issues:
             rows.append([i.get("project_code", ""), i.get("description", "")])
             row_types.append(i.get("type"))
-        ws = _write_sheet(wb, "Budget to Actual", ["Project Code", "To be reviewed"], rows,
-                          col_widths=[20, 55])
+        ws = _write_sheet(wb, "Budget to Actual", ["Project Code", "To be reviewed"], rows)
         for idx, t in enumerate(row_types, start=2):
             ws.cell(row=idx, column=2).font = _NEG_FONT if t == "negative" else _POS_FONT
         any_section = True
@@ -144,8 +237,7 @@ def build_person_workbook(
              p.get("notes", "")]
             for p in owner_tbd
         ]
-        _write_sheet(wb, "TBD Projects", ["Project Code", "Status", "Budget", "Notes"], rows,
-                    col_widths=[20, 15, 15, 45])
+        _write_sheet(wb, "TBD Projects", ["Project Code", "Status", "Budget", "Notes"], rows)
         any_section = True
 
     # ── Variance ──────────────────────────────────────────────
@@ -179,10 +271,8 @@ def build_person_workbook(
             if is_staff else
             ["Person", "Project Code", "Period", "Actual Hrs", "Scheduled Hrs", "Difference", "To be reviewed"]
         )
-        widths = ([18, 12, 12, 14, 12, 45] if is_staff
-                  else [18, 18, 12, 12, 14, 12, 45])
         diff_col = 5 if is_staff else 6
-        ws = _write_sheet(wb, "Variance", headers, rows, col_widths=widths)
+        ws = _write_sheet(wb, "Variance", headers, rows)
         for idx, diff in enumerate(diffs, start=2):
             ws.cell(row=idx, column=diff_col).font = _OVER_FONT if diff < 0 else _NEG_FONT
         any_section = True
@@ -214,8 +304,7 @@ def build_person_workbook(
             ]]
             ws = _write_sheet(wb, "Utilization",
                               ["Utilization", "Goal", "Difference", "Chargeable Hrs",
-                               "Remaining Hrs", "To be reviewed"], rows,
-                              col_widths=[14, 10, 14, 16, 16, 45])
+                               "Remaining Hrs", "To be reviewed"], rows)
             if diff_pct is not None:
                 ws.cell(row=2, column=3).font = (
                     _NEG_FONT if diff_pct > 10 else (_OVER_FONT if diff_pct < -10 else _POS_FONT)
@@ -232,7 +321,7 @@ def build_person_workbook(
                 rows = [[m, f"{int(person_pto[m])} hrs" if person_pto.get(m) else "—"]
                        for m in months_to_show]
                 _write_sheet(wb, "PTO", ["Month", "PTO Hours"], rows,
-                            response_col=False, col_widths=[20, 15])
+                            response_col=False)
                 any_section = True
 
     if not any_section:
