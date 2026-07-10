@@ -391,16 +391,22 @@ def compute_variances(
     min_diff: float = DEFAULT_VARIANCE_MIN,
     max_diff: float = DEFAULT_VARIANCE_MAX,
     selected_periods: list | None = None,
+    include_all: bool = False,
 ) -> list:
     """
     Compare per-person / per-project / per-period actuals vs schedule.
 
-    Flags rows where:
+    By default (include_all=False), only returns flagged rows where:
         difference <= min_diff   (actual well below schedule)
         OR
         difference >= max_diff   (actual at or above schedule)
-
     Both bounds are inclusive (equal-to is flagged).
+
+    When include_all=True, every row with any real hours (actual or
+    scheduled) is returned — including exact matches — so the caller can
+    show a full "verify your hours" list rather than just problems. Each
+    row gets an "is_variance" flag so the caller can still tell matches
+    from flagged rows.
     """
     variances = []
     _excl = {p.lower() for p in VARIANCE_EXCLUDE_PREFIXES}
@@ -434,16 +440,25 @@ def compute_variances(
                 actual_hrs = round(actual_periods.get(period, 0.0), 2)
                 sched_hrs  = round(sched_periods.get(period, 0.0), 2)
                 diff       = round(actual_hrs - sched_hrs, 2)
+                is_variance = (diff < min_diff or diff > max_diff)
 
-                # Include equal-to on both bounds
-                # Skip exact zero — never meaningful to flag
+                if include_all:
+                    # Keep every row with real hours on either side (a match
+                    # is still worth showing so the person can verify it);
+                    # only skip rows where there's genuinely nothing here.
+                    if actual_hrs == 0.0 and sched_hrs == 0.0:
+                        continue
+                else:
+                    # Original behavior: only flagged rows, never exact zero.
+                    if diff == 0.0:
+                        continue
+                    if not is_variance:  # strict: <-5 or >0
+                        continue
+
+                # Context-aware question (blank for a clean match)
                 if diff == 0.0:
-                    continue
-                if not (diff < min_diff or diff > max_diff):  # strict: <-5 or >0
-                    continue
-
-                # Context-aware question
-                if diff > 0:
+                    question = ""
+                elif diff > 0:
                     question = (
                         "Do additional hours need to be added to the "
                         "schedule for this project?"
@@ -464,6 +479,7 @@ def compute_variances(
                     "sched_hours":  sched_hrs,
                     "difference":   diff,
                     "question":     question,
+                    "is_variance":  is_variance,
                     "person_email": _lookup_email(sched_person),
                 })
 
@@ -508,7 +524,8 @@ def compute_variances(
                 diff = round(actual_hrs - sched_hrs, 2)  # always negative
                 if diff == 0.0:
                     continue
-                if not (diff < min_diff or diff > max_diff):
+                is_variance = (diff < min_diff or diff > max_diff)
+                if not include_all and not is_variance:
                     continue
                 if (person_name, sched_code, period) in _seen:
                     continue
@@ -528,6 +545,7 @@ def compute_variances(
                     "sched_hours":  sched_hrs,
                     "difference":   diff,
                     "question":     question,
+                    "is_variance":  is_variance,
                     "person_email": _lookup_email(sched_person),
                 })
 
