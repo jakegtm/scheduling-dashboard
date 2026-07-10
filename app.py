@@ -15,7 +15,7 @@ import streamlit as st
 
 
 from config import (
-    SENDER_EMAIL, SENDER_NAMES, EMAIL_LOOKUP, INTERN_NAMES, STAFF_NAMES, NAME_ALIASES,
+    EMAIL_LOOKUP, INTERN_NAMES, STAFF_NAMES, NAME_ALIASES,
     POSITION_ORDER, PERSON_ROLE, _rank, DISPLAY_NAMES,
     DEFAULT_BUDGET_THRESHOLD, DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_PROJECTION_THRESHOLD_PCT,
@@ -156,13 +156,6 @@ if not st.session_state.authenticated:
 def _hash(b: bytes) -> str:
     return hashlib.md5(b).hexdigest()
 
-def _sender_name() -> str:
-    try:
-        from_email = st.secrets["email"]["from_email"]
-    except (KeyError, FileNotFoundError):
-        from_email = SENDER_EMAIL
-    return SENDER_NAMES.get(from_email, "Jake")
-
 def _find_sheet(sheetnames, keywords):
     for name in sheetnames:
         if any(kw in name.lower() for kw in keywords):
@@ -283,6 +276,7 @@ def get_sched_periods(file_hash, _b, active_month):
         return [], []
     return get_schedule_periods(wb, sheet)
 
+@st.cache_data(show_spinner=False, max_entries=10)
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
                  _v="v14"):  # bump _v to bust stale cache after code changes
@@ -349,7 +343,6 @@ def run_variance(file_hash, _b, oa_hash, _oa,
 # SIDEBAR — settings (st.form prevents reruns on +/- clicks)
 # ============================================================
 active_month = datetime.now().strftime("%B")
-sender_name  = _sender_name()
 
 # Compute current month + next 2 for PTO schedule
 def _pto_months(current: str) -> list:
@@ -853,17 +846,24 @@ all_owner_keys = sorted(active_owners.keys(), key=_rank)
 if not st.session_state.selected_owners.issubset(set(all_owner_keys)):
     st.session_state.selected_owners = set(all_owner_keys)
 
+st.markdown("**Select people to include:**")
+
+def _select_all():
+    for owner in all_owner_keys:
+        st.session_state[f"chk_{owner}"] = True
+    st.session_state.selected_owners = set(all_owner_keys)
+
+def _deselect_all():
+    for owner in all_owner_keys:
+        st.session_state[f"chk_{owner}"] = False
+    st.session_state.selected_owners = set()
+
 col_sa, col_da, _ = st.columns([0.15, 0.18, 0.67])
 with col_sa:
-    if st.button("✅ Select All"):
-        st.session_state.selected_owners = set(all_owner_keys)
-        st.rerun()
+    st.button("✅ Select All", on_click=_select_all)
 with col_da:
-    if st.button("⬜ Deselect All"):
-        st.session_state.selected_owners = set()
-        st.rerun()
+    st.button("⬜ Deselect All", on_click=_deselect_all)
 
-st.markdown("**Select people to include:**")
 for owner in all_owner_keys:
     data       = active_owners[owner]
     first_name = data.get("first_name", owner)
@@ -873,8 +873,11 @@ for owner in all_owner_keys:
              f"Budget: {len(data['budget'])} · "
              f"Util: {len(data['util'])} · "
              f"Variance: {len(data['variance'])}")
-    checked = owner in st.session_state.selected_owners
-    if st.checkbox(label, value=checked, key=f"chk_{owner}"):
+    chk_key = f"chk_{owner}"
+    if chk_key not in st.session_state:
+        st.session_state[chk_key] = owner in st.session_state.selected_owners
+    checked = st.checkbox(label, key=chk_key)
+    if checked:
         st.session_state.selected_owners.add(owner)
     else:
         st.session_state.selected_owners.discard(owner)
