@@ -12,7 +12,6 @@ from datetime import datetime
 
 import openpyxl
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 from config import (
@@ -22,9 +21,7 @@ from config import (
     DEFAULT_PROJECTION_THRESHOLD_PCT,
     DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX,
 )
-from email_utils import (
-    email_configured, EMAIL_OK, send_emails_batch, build_html_email,
-)
+from report_export import build_person_workbook, build_reports_zip
 from processors.budget_actual   import process_budget_actual
 from processors.project_tracker import process_project_tracker
 from processors.variance        import (
@@ -151,10 +148,6 @@ if not st.session_state.authenticated:
 
 # ── Logout button in sidebar ──────────────────────────────────
 # (rendered after authentication check so sidebar only shows when logged in)
-
-if not email_configured():
-    st.warning("⚠️ **Email credentials not configured.** "
-               "Add SendGrid keys in Streamlit Secrets to enable sending.")
 
 # ============================================================
 # HELPERS
@@ -458,9 +451,6 @@ with st.sidebar:
             use_container_width=True, hide_index=True,
         )
 
-if not EMAIL_OK:
-    st.sidebar.warning("SendGrid keys not found — previews work, sending disabled.")
-
 budget_threshold   = st.session_state.settings["budget_threshold"]
 negative_threshold = st.session_state.settings["negative_threshold"]
 variance_min       = st.session_state.settings["variance_min"]
@@ -649,7 +639,7 @@ if available_months:
 # ============================================================
 # OWNER MAP
 # Build owners_data for everyone in valid_people who has an email.
-# This ensures ALL schedule staff appear in the email list.
+# This ensures ALL schedule staff appear in the report list.
 # ============================================================
 owners_data = defaultdict(lambda: {
     "email": None, "first_name": "there",
@@ -701,7 +691,7 @@ for v in variance_issues:
     project_code = v.get("project_code", "")
     proj_owner   = _normalize_name(_project_owner_map.get(project_code, ""))
 
-    # Everyone gets their OWN variance rows in their personal email
+    # Everyone gets their OWN variance rows in their personal report
     if person and (not valid_people or person in valid_people):
         if not owners_data[person]["email"]:
             owners_data[person]["email"] = _lookup_email(person)
@@ -845,12 +835,13 @@ with tab4:
             use_container_width=True, hide_index=True)
 
 # ============================================================
-# COMBINED EMAILS
+# COMBINED REPORTS (EXCEL — replaces the old emailed reports)
 # ============================================================
 st.divider()
-st.header("📧 Combined Emails")
-st.caption("One email per person · Project Tracker · Budget · "
-           "TBD/Pending SOW · Variance · Utilization")
+st.header("📊 Combined Reports")
+st.caption("One Excel workbook per person · Project Tracker · Budget · "
+           "TBD/Pending SOW · Variance · Utilization · PTO — "
+           "all packaged into a single ZIP for you to save and distribute.")
 
 if not active_owners:
     st.info("No staff found with email addresses — check config.py EMAIL_LOOKUP.")
@@ -872,13 +863,12 @@ with col_da:
         st.session_state.selected_owners = set()
         st.rerun()
 
-st.markdown("**Select recipients:**")
+st.markdown("**Select people to include:**")
 for owner in all_owner_keys:
     data       = active_owners[owner]
     first_name = data.get("first_name", owner)
-    email_str  = data.get("email") or "⚠️ no email"
-    _display = DISPLAY_NAMES.get(owner, owner)
-    label = (f"**{first_name} ({_display})** · {email_str} — "
+    _display   = DISPLAY_NAMES.get(owner, owner)
+    label = (f"**{first_name} ({_display})** — "
              f"Tracker: {len(data['tracker'])} · "
              f"Budget: {len(data['budget'])} · "
              f"Util: {len(data['util'])} · "
@@ -889,122 +879,109 @@ for owner in all_owner_keys:
     else:
         st.session_state.selected_owners.discard(owner)
 
-# ---- Build HTML emails ----
-st.markdown("**Email previews:**")
-combined_emails = []
 
-for owner in sorted(st.session_state.selected_owners, key=_rank):
-    if owner not in active_owners:
-        continue
-    data         = active_owners[owner]
-    person_email = data.get("email")
-    first_name   = data.get("first_name", owner)
-    if not person_email:
-        continue
+def _safe_filename(name: str) -> str:
+    keep = "".join(c if c.isalnum() or c in (" ", "_", "-") else "" for c in name)
+    return keep.strip().replace(" ", "_") + ".xlsx"
 
-    is_intern     = owner in INTERN_NAMES
-    tracker_list  = data.get("tracker", [])
-    budget_list   = data.get("budget", [])
-    variance_list = data.get("variance", [])
 
-    # Interns only see their own variance rows
-    if is_intern:
-        variance_list = [v for v in variance_list if v.get("person") == owner]
+def _build_payload(owner_list):
+    """Assemble the build_person_workbook() kwargs for each owner, same shape
+    the old build_html_email() calls used — just renamed 'owner' → included as a key."""
+    payload = []
+    for owner in sorted(owner_list, key=_rank):
+        if owner not in active_owners:
+            continue
+        data          = active_owners[owner]
+        is_intern     = owner in INTERN_NAMES
+        variance_list = data.get("variance", [])
+        if is_intern:
+            variance_list = [v for v in variance_list if v.get("person") == owner]
+        payload.append(dict(
+            owner            = owner,
+            first_name       = data.get("first_name", owner),
+            tracker_issues   = data.get("tracker", []),
+            budget_issues    = data.get("budget", []),
+            tbd_projects     = tbd_projects,
+            variance_issues  = variance_list,
+            util_data        = util_data,
+            pto_schedule     = pto_schedule_data,
+            pto_months       = _pto_month_list,
+            has_openair      = has_openair,
+            no_openair_note  = not has_openair and bool(variance_list),
+            selected_months  = selected_months if len(selected_months) > 1 else None,
+            is_staff         = owner in STAFF_NAMES,
+            filename         = _safe_filename(DISPLAY_NAMES.get(owner, owner)),
+        ))
+    return payload
 
-    html = build_html_email(
-        owner         = owner,
-        first_name    = first_name,
-        tracker_issues= tracker_list,
-        budget_issues = budget_list,
-        tbd_projects  = tbd_projects,
-        variance_issues=variance_list,
-        util_data     = util_data,
-        pto_schedule  = pto_schedule_data,
-        pto_months    = _pto_month_list,
-        has_openair   = has_openair,
-        no_openair_note = not has_openair and bool(variance_list),
-        selected_months = selected_months if len(selected_months) > 1 else None,
-        is_staff      = owner in STAFF_NAMES,
-    )
 
-    if not html:
-        continue
+def _tabs_included(person: dict) -> list[str]:
+    tabs = []
+    if person["tracker_issues"]:
+        tabs.append("Tracker")
+    if person["budget_issues"]:
+        tabs.append("Budget")
+    if [p for p in tbd_projects if p.get("owner") == person["owner"]]:
+        tabs.append("TBD")
+    if person["variance_issues"]:
+        tabs.append("Variance")
+    if any(u.get("person") == person["owner"] for u in (util_data or [])):
+        tabs.append("Utilization")
+    person_pto = pto_schedule_data.get(person["owner"], {})
+    if person_pto and any(person_pto.get(m, 0) for m in _pto_month_list):
+        tabs.append("PTO")
+    return tabs
 
-    combined_emails.append({
-        "to":      person_email,
-        "subject": f"Scheduling Review — {active_month}",
-        "person":  owner,
-        "body":    html,
-    })
 
-    with st.expander(f"👁 {first_name} ({DISPLAY_NAMES.get(owner, owner)}) · {person_email}"):
-        components.html(html, height=500, scrolling=True)
+# ---- Preview: what each selected person's workbook will contain ----
+st.markdown("**Preview (tabs included per person):**")
+selected_payload = _build_payload(st.session_state.selected_owners)
+for person in selected_payload:
+    tabs_included = _tabs_included(person)
+    _display = DISPLAY_NAMES.get(person["owner"], person["owner"])
+    if tabs_included:
+        st.write(f"👤 **{person['first_name']}** ({_display}) — {', '.join(tabs_included)}")
+    else:
+        st.write(f"👤 **{person['first_name']}** ({_display}) — "
+                 f"_no applicable sections, will be skipped in the ZIP_")
 
-# ---- Send buttons ----
+# ---- Generate & download ----
 st.divider()
-no_email = [o for o in st.session_state.selected_owners
-            if not active_owners.get(o,{}).get("email")]
-if no_email:
-    names = [active_owners[o].get("first_name",o) for o in no_email
-             if o in active_owners]
-    st.warning(f"⚠️ No email configured for: {', '.join(names)} — will be skipped.")
-
-sendable = [e for e in combined_emails if e.get("to")]
-
-all_sendable = []
-for owner in sorted(all_owner_keys, key=_rank):
-    data = active_owners.get(owner, {})
-    if not data.get("email"):
-        continue
-    is_intern     = owner in INTERN_NAMES
-    variance_list = data.get("variance", [])
-    if is_intern:
-        variance_list = [v for v in variance_list if v.get("person") == owner]
-    html = build_html_email(
-        owner=owner, first_name=data.get("first_name", owner),
-        tracker_issues=data.get("tracker",[]),
-        budget_issues=data.get("budget",[]),
-        tbd_projects=tbd_projects,
-        variance_issues=variance_list,
-        util_data=util_data,
-        pto_schedule=pto_schedule_data,
-        pto_months=_pto_month_list,
-        has_openair=has_openair,
-        no_openair_note=not has_openair and bool(variance_list),
-        selected_months=selected_months if len(selected_months) > 1 else None,
-        is_staff=owner in STAFF_NAMES,
-    )
-    if html:
-        all_sendable.append({"to": data["email"], "subject": f"Scheduling Review — {active_month}",
-                              "person": owner, "body": html})
+all_payload = _build_payload(all_owner_keys)
 
 col_b1, col_b2 = st.columns(2)
 with col_b1:
-    send_sel = st.button(
-        f"📤 Send to Selected ({len(sendable)})",
-        type="primary", key="send_selected",
-        disabled=not EMAIL_OK or not sendable)
+    gen_selected = st.button(
+        f"📦 Generate ZIP — Selected ({len(selected_payload)})",
+        type="primary", key="gen_selected", disabled=not selected_payload,
+        use_container_width=True)
 with col_b2:
-    send_all_btn = st.button(
-        f"📤 Send All ({len(all_sendable)})",
-        key="send_all",
-        disabled=not EMAIL_OK or not all_sendable)
+    gen_all = st.button(
+        f"📦 Generate ZIP — All ({len(all_payload)})",
+        key="gen_all", disabled=not all_payload,
+        use_container_width=True)
 
-if not EMAIL_OK:
-    st.info("Configure SendGrid keys in Streamlit Secrets to enable sending.")
+if gen_selected:
+    with st.spinner(f"Building {len(selected_payload)} workbook(s)…"):
+        st.session_state["_zip_bytes_selected"] = build_reports_zip(selected_payload)
+if gen_all:
+    with st.spinner(f"Building {len(all_payload)} workbook(s)…"):
+        st.session_state["_zip_bytes_all"] = build_reports_zip(all_payload)
 
-if send_sel or send_all_btn:
-    targets = sendable if send_sel else all_sendable
-    with st.spinner(f"Sending {len(targets)} email(s)…"):
-        try:
-            results = send_emails_batch(targets)
-            sent   = [r for r in results if r.get("status") == "sent"]
-            failed = [r for r in results if r.get("status") != "sent"]
-            if sent:
-                st.success(f"✅ {len(sent)} email(s) sent!")
-            if failed:
-                st.error(f"❌ {len(failed)} failed:")
-                for r in failed:
-                    st.write(f"  • {r.get('to','?')}: {r.get('status','?')}")
-        except Exception as e:
-            st.error(f"Error sending: {e}")
+if st.session_state.get("_zip_bytes_selected"):
+    st.download_button(
+        "⬇️ Download Selected Reports (ZIP)",
+        data=st.session_state["_zip_bytes_selected"],
+        file_name=f"scheduling_reports_selected_{datetime.now().strftime('%Y%m%d')}.zip",
+        mime="application/zip",
+        use_container_width=True,
+    )
+if st.session_state.get("_zip_bytes_all"):
+    st.download_button(
+        "⬇️ Download All Reports (ZIP)",
+        data=st.session_state["_zip_bytes_all"],
+        file_name=f"scheduling_reports_all_{datetime.now().strftime('%Y%m%d')}.zip",
+        mime="application/zip",
+        use_container_width=True,
+    )
