@@ -280,7 +280,8 @@ def get_sched_periods(file_hash, _b, active_month):
 @st.cache_data(show_spinner=False, max_entries=10)
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
-                 _v="v14"):  # bump _v to bust stale cache after code changes
+                 include_all=False,
+                 _v="v15"):  # bump _v to bust stale cache after code changes
     wb = _load_wb(file_hash, _b)
 
     # Determine which month tabs to read based on selected periods.
@@ -333,7 +334,8 @@ def run_variance(file_hash, _b, oa_hash, _oa,
             filtered = filter_by_months(actual, list(selected_months_tuple))
         variances = compute_variances(filtered, sched,
                                       min_diff=var_min, max_diff=var_max,
-                                      selected_periods=list(selected_months_tuple))
+                                      selected_periods=list(selected_months_tuple),
+                                      include_all=include_all)
         gc.collect()
         return variances, None
     except Exception as e:
@@ -589,6 +591,7 @@ st.divider()
 # ============================================================
 selected_months = []
 variance_issues = []
+all_hours_issues = []
 var_error       = None
 
 if available_months:
@@ -626,6 +629,17 @@ if available_months:
                     tuple(selected_months),
                     -variance_min, variance_max,  # min is stored positive, negated here
                     active_month,
+                )
+                # Full "current month hours" list (matches + variances) used
+                # only for the per-person Excel reports — the on-screen tab
+                # above still shows flagged-only variances for quick review.
+                all_hours_issues, _all_hours_err = run_variance(
+                    file_hash, sched_bytes,
+                    oa_hash, oa_bytes,
+                    tuple(selected_months),
+                    -variance_min, variance_max,
+                    active_month,
+                    include_all=True,
                 )
             except Exception as e:
                 var_error = str(e)
@@ -680,7 +694,7 @@ for _issue in budget_issues:
     if _code and _owner:
         _project_owner_map.setdefault(_code, _owner)
 
-for v in variance_issues:
+for v in all_hours_issues:
     person       = _normalize_name(v.get("person", ""))
     project_code = v.get("project_code", "")
     proj_owner   = _normalize_name(_project_owner_map.get(project_code, ""))
@@ -873,7 +887,7 @@ for owner in all_owner_keys:
              f"Tracker: {len(data['tracker'])} · "
              f"Budget: {len(data['budget'])} · "
              f"Util: {len(data['util'])} · "
-             f"Variance: {len(data['variance'])}")
+             f"Hours: {len(data['variance'])}")
     chk_key = f"chk_{owner}"
     if chk_key not in st.session_state:
         st.session_state[chk_key] = owner in st.session_state.selected_owners
