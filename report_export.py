@@ -39,6 +39,7 @@ _WRAP_HEADERS = {"To be reviewed", "Notes", "Response"}
 _CENTER_HEADERS = {
     "Actual Hrs", "Scheduled Hrs", "Difference", "Chargeable Hrs",
     "Remaining Hrs", "Utilization", "Goal", "PTO Hours", "Status", "Budget",
+    "Budget Amount",
 }
 _NUMERIC_HEADERS = {"Actual Hrs", "Scheduled Hrs", "Difference"}
 
@@ -221,11 +222,19 @@ def build_person_workbook(
     if budget_issues:
         rows, row_types = [], []
         for i in budget_issues:
-            rows.append([i.get("project_code", ""), i.get("description", "")])
+            budget_val = i.get("budget", 0) or 0
+            rows.append([
+                i.get("project_code", ""),
+                f"${budget_val:,.0f}",
+                i.get("description", ""),
+            ])
             row_types.append(i.get("type"))
-        ws = _write_sheet(wb, "Budget to Actual", ["Project Code", "To be reviewed"], rows)
+        ws = _write_sheet(
+            wb, "Budget to Actual",
+            ["Project Code", "Budget Amount", "To be reviewed"], rows,
+        )
         for idx, t in enumerate(row_types, start=2):
-            ws.cell(row=idx, column=2).font = _NEG_FONT if t == "negative" else _POS_FONT
+            ws.cell(row=idx, column=3).font = _NEG_FONT if t == "negative" else _POS_FONT
         any_section = True
 
     # ── TBD / Pending SOW ─────────────────────────────────────
