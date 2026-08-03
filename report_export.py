@@ -265,7 +265,13 @@ def build_person_workbook(
             is_var = v.get("is_variance", True)  # default True = old callers/back-compat
             diffs.append(diff)
             is_variance_flags.append(is_var)
-            review_text = v.get("question", "") if is_var else "✓ Hours match — no action needed"
+            if is_var:
+                review_text = v.get("question", "")
+            elif diff == 0:
+                review_text = "✓ Hours match — no action needed"
+            else:
+                # Not flagged, but not equal either — don't claim they match.
+                review_text = "Within threshold — no action needed"
             if is_staff:
                 rows.append([
                     v.get("project_code", ""), v.get("period", ""),
@@ -290,8 +296,10 @@ def build_person_workbook(
         _optional_font = Font(name="Arial", size=10, italic=True, color="999999")
         for r_offset, (diff, is_var) in enumerate(zip(diffs, is_variance_flags)):
             row_idx = r_offset + 2
+            # diff = actual - scheduled, so diff < 0 == worked LESS than scheduled.
+            # _NEG_FONT is the worked-less color; _OVER_FONT is worked-more.
             ws.cell(row=row_idx, column=diff_col).font = (
-                (_OVER_FONT if diff < 0 else _NEG_FONT) if is_var else _POS_FONT
+                (_NEG_FONT if diff < 0 else _OVER_FONT) if is_var else _POS_FONT
             )
             if not is_var:
                 # Non-flagged row: make the Response cell read as optional —
