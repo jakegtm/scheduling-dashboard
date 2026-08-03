@@ -245,19 +245,48 @@ def run_utilization(file_hash, _b, month):
     gc.collect()
     return data
 
+def _months_from_periods(periods) -> list:
+    """['July 1-15', 'August 1-15'] -> ['July', 'August'] (order preserved, deduped).
+
+    Single source of truth for "which month tabs do the selected periods
+    imply" — used for reading schedule hours AND for building the roster."""
+    import re as _re
+    months = []
+    for p in periods:
+        m = _re.match(r"([A-Za-z]+)", str(p))
+        if m:
+            name = m.group(1).capitalize()
+            if name not in months:
+                months.append(name)
+    return months
+
+
+def _find_month_sheet(wb, month: str):
+    """First sheet whose name starts with the month's 3-letter prefix.
+    Handles tabs named 'Aug'/'August', 'Sept'/'September', 'March', etc."""
+    return next(
+        (s for s in wb.sheetnames if s.lower().startswith(month[:3].lower())),
+        None,
+    )
+
+
 @st.cache_data(show_spinner=False)
-def get_valid_people(file_hash, _b, active_month):
+def get_valid_people(file_hash, _b, months_tuple):
+    """Roster = everyone staffed on ANY month tab implied by the selected
+    periods. Previously this read only the current calendar month, which
+    silently dropped anyone not staffed in that one month."""
     wb = _load_wb(file_hash, _b)
-    for name in wb.sheetnames:
-        if name.lower().startswith(active_month[:3].lower()):
-            ws = wb[name]
-            people = set()
-            for col in range(7, 45):
-                val = ws.cell(row=2, column=col).value
-                if val:
-                    people.add(_normalize_name(str(val).strip()))
-            return people
-    return set()
+    people = set()
+    for month in months_tuple:
+        sheet = _find_month_sheet(wb, month)
+        if not sheet:
+            continue
+        ws = wb[sheet]
+        for col in range(7, 45):
+            val = ws.cell(row=2, column=col).value
+            if val:
+                people.add(_normalize_name(str(val).strip()))
+    return people
 
 def get_oa_periods(oa_hash, _oa_bytes):
     """Return (available, future) period lists from OpenAir data.
@@ -281,26 +310,20 @@ def get_sched_periods(file_hash, _b, active_month):
 def run_variance(file_hash, _b, oa_hash, _oa,
                  selected_months_tuple, var_min, var_max, active_month,
                  include_all=False,
-                 _v="v15"):  # bump _v to bust stale cache after code changes
+                 _v="v16"):  # bump _v to bust stale cache after code changes
     wb = _load_wb(file_hash, _b)
 
     # Determine which month tabs to read based on selected periods.
     # e.g. selecting "May 1-15" and "June 1-15" requires both May and June tabs.
-    import re as _re
-    needed_months = set()
-    for period in selected_months_tuple:
-        m = _re.match(r"([A-Za-z]+)", str(period))
-        if m:
-            needed_months.add(m.group(1).capitalize())
-    needed_months.add(active_month)  # always include current month as fallback
+    # Read exactly the tabs the SELECTED periods point at. active_month is a
+    # fallback for when nothing parses — not an unconditional addition, which
+    # used to drag in the current month's tab on every single run.
+    needed_months = _months_from_periods(selected_months_tuple) or [active_month]
 
     sheets_to_read = []
     for month in needed_months:
-        sheet = next(
-            (s for s in wb.sheetnames if s.lower().startswith(month[:3].lower())),
-            None,
-        )
-        if sheet:
+        sheet = _find_month_sheet(wb, month)
+        if sheet and sheet not in sheets_to_read:
             sheets_to_read.append(sheet)
 
     if not sheets_to_read:
@@ -555,11 +578,8 @@ with st.spinner("🔄 Running analysis — please wait…") if _show_spinner els
     except Exception:
         pass
 
-    valid_people = set()
-    try:
-        valid_people = get_valid_people(file_hash, sched_bytes, active_month)
-    except Exception:
-        pass
+    # NOTE: valid_people is computed AFTER the period selector below, since the
+    # roster now depends on which month tabs the selected periods point at.
     st.session_state._analysis_done = True  # suppress spinner on settings reruns
 
     # OpenAir or schedule-derived periods
@@ -643,6 +663,25 @@ if available_months:
                 )
             except Exception as e:
                 var_error = str(e)
+
+# ── Roster, derived from the SELECTED periods' month tabs ───────────
+_roster_months = _months_from_periods(selected_months) or [active_month]
+valid_people = set()
+try:
+    valid_people = get_valid_people(file_hash, sched_bytes, tuple(_roster_months))
+except Exception:
+    pass
+
+# Empty selection is the single most common cause of a blank report — e.g.
+# early in a new month, before that month's tab has been scheduled. Say so
+# plainly instead of silently producing workbooks with no Hours tab.
+if selected_months and not all_hours_issues and not var_error:
+    st.warning(
+        f"No scheduled or actual hours found in **{', '.join(_roster_months)}** "
+        f"for the selected period(s): {', '.join(selected_months)}. "
+        "The Current Month Hours tab will be omitted from the reports. "
+        "If that month isn't scheduled yet, pick a different period above."
+    )
 
 # ============================================================
 # OWNER MAP
@@ -943,7 +982,7 @@ def _tabs_included(person: dict) -> list[str]:
     if [p for p in tbd_projects if p.get("owner") == person["owner"]]:
         tabs.append("TBD")
     if person["variance_issues"]:
-        tabs.append("Variance")
+        tabs.append("Current Month Hours")
     if any(u.get("person") == person["owner"] for u in (util_data or [])):
         tabs.append("Utilization")
     person_pto = pto_schedule_data.get(person["owner"], {})
@@ -963,10 +1002,6 @@ for person in selected_payload:
     else:
         st.write(f"👤 **{person['first_name']}** ({_display}) — "
                  f"_no applicable sections, will be skipped in the ZIP_")
-
-# ---- Generate & download ----
-st.divider()
-all_payload = _build_payload(all_owner_keys)
 
 # ---- Generate & download (single click — no separate "Generate" step) ----
 st.divider()
