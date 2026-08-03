@@ -28,6 +28,66 @@ def _normalize_period(s: str) -> str:
     return re.sub(r"\s*[-–—]\s*", "-", str(s).strip())
 
 
+def _month_from_token(token: str) -> str | None:
+    """Resolve a month word to its full calendar name, or None.
+
+    'Aug' -> 'August',  'Sept' -> 'September',  'sep' -> 'September',
+    'March' -> 'March'. Tolerates trailing junk and odd casing.
+    """
+    import calendar as _cal
+    t = re.sub(r"[^a-z]", "", str(token).lower())
+    if not t:
+        return None
+    for i in range(1, 13):
+        full = _cal.month_name[i]
+        if full.lower().startswith(t) or t.startswith(_cal.month_abbr[i].lower()):
+            return full
+    return None
+
+
+def _canonical_period(raw, sheet_name: str = "", year: int = None) -> str:
+    """Rewrite whatever a month tab's row 6 says into the exact label the app
+    generates elsewhere: '<Full Month> 1-15' or '<Full Month> 16-<last day>'.
+
+    The month tabs are hand-maintained and inconsistent, so this absorbs:
+      'Aug 1-15'    -> 'August 1-15'        (abbreviated month)
+      'Sept 16-30'  -> 'September 16-30'    (abbreviated month)
+      'Oct 15-31'   -> 'October 16-31'      (wrong start day)
+      'Feb 16-31'   -> 'February 16-28'     (wrong end day for the month)
+      '1-15'        -> '<tab's month> 1-15' (no month in the label at all)
+
+    Without this, a tab whose label doesn't happen to spell the month out is
+    completely invisible to the period selector and reports zero hours.
+    """
+    import calendar as _cal
+    from datetime import date as _date
+    if year is None:
+        year = _date.today().year
+
+    text = _normalize_period(raw)
+
+    # Month: prefer the label's own leading word; fall back to the tab name.
+    lead  = re.match(r"([A-Za-z]+)", text)
+    month = _month_from_token(lead.group(1)) if lead else None
+    if month is None:
+        month = _month_from_token(sheet_name)
+    if month is None:
+        return text  # unresolvable — leave untouched rather than guess
+
+    days = re.findall(r"(\d+)", text)
+    if not days:
+        return text  # not a period label at all
+
+    month_num = list(_cal.month_name).index(month)
+    last_day  = _cal.monthrange(year, month_num)[1]
+
+    # Which half? The END day is the reliable signal — 'Oct 15-31' is plainly
+    # the second half despite starting at 15.
+    if int(days[-1]) > 15:
+        return f"{month} 16-{last_day}"
+    return f"{month} 1-15"
+
+
 def _is_period_2(period_label: str) -> bool:
     """Return True if this is the second half of the month (16th onwards)."""
     m = re.search(r"(\d+)\s*[-–]\s*(\d+)", str(period_label))
@@ -347,7 +407,7 @@ def read_schedule_hours(wb, sheet_name: str) -> dict:
     col_map = {}
     for col in range(PERSON_COL_START, PERSON_COL_END + 1):
         period_val = ws.cell(row=PERIOD_LABEL_ROW, column=col).value
-        period_str = _normalize_period(period_val) if period_val else ""
+        period_str = _canonical_period(period_val, sheet_name) if period_val else ""
         pair_start = PERSON_COL_START + ((col - PERSON_COL_START) // 2) * 2
         person_val = ws.cell(row=PERSON_NAME_ROW, column=pair_start).value
         person_str = str(person_val).strip() if person_val else ""
