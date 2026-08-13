@@ -22,6 +22,7 @@ COL_CODE      = 2   # B
 COL_STATUS    = 3   # C
 COL_OWNER     = 9   # I — Project Owner (col H is Client Owner, ignored)
 COL_BUDGET    = 10  # J
+COL_TOTAL_SCHED = 11  # K — Total Scheduled (actuals for closed months + schedule forward)
 COL_REMAINING = 12  # L
 
 
@@ -42,6 +43,21 @@ def _lookup_email(name: str) -> str | None:
         if key.lower() == name.lower():
             return email
     return None
+
+
+def _budget_equals_actual(budget, total_sched) -> str:
+    """
+    "Yes" when Budget Amount (col J) matches Total Scheduled (col K) to the cent.
+
+    Col K is the sum of the monthly columns (M:Y), which hold actual revenue for
+    closed months and scheduled amounts going forward — so this answers
+    "is this project fully accounted for?" in dollars.
+
+    Returns "No" when either value is missing rather than guessing.
+    """
+    if budget is None or total_sched is None:
+        return "No"
+    return "Yes" if abs(budget - total_sched) < 0.01 else "No"
 
 
 def _lookup_first(name: str) -> str:
@@ -67,7 +83,9 @@ def process_budget_actual(
 
     Each issue dict contains:
         client, project_code, owner, owner_email, owner_first,
-        budget, remaining, type ("negative" | "not_projected"),
+        budget, remaining, total_scheduled,
+        budget_equals_actual ("Yes" | "No"),
+        type ("negative" | "not_projected"),
         description
     """
     issues = []
@@ -81,6 +99,7 @@ def process_budget_actual(
         owner     = row[COL_OWNER - 1]
         budget    = _to_float(row[COL_BUDGET - 1])
         remaining = _to_float(row[COL_REMAINING - 1])
+        total_sched = _to_float(row[COL_TOTAL_SCHED - 1])
 
         # Skip blank rows
         if not client and not code:
@@ -107,6 +126,8 @@ def process_budget_actual(
                 "owner_first":  _lookup_first(owner_str),
                 "budget":       budget,
                 "remaining":    remaining,
+                "total_scheduled":      total_sched,
+                "budget_equals_actual": _budget_equals_actual(budget, total_sched),
                 "type":         "negative",
                 "description":  f"Over budget by ${abs(remaining):,.0f}",
             })
@@ -121,6 +142,8 @@ def process_budget_actual(
                 "owner_first":  _lookup_first(owner_str),
                 "budget":       budget,
                 "remaining":    remaining,
+                "total_scheduled":      total_sched,
+                "budget_equals_actual": _budget_equals_actual(budget, total_sched),
                 "type":         "not_projected",
                 "description":  f"${remaining:,.0f} unscheduled remaining",
             })

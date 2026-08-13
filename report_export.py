@@ -39,7 +39,7 @@ _WRAP_HEADERS = {"To be reviewed", "Notes", "Response"}
 _CENTER_HEADERS = {
     "Actual Hrs", "Scheduled Hrs", "Difference", "Chargeable Hrs",
     "Remaining Hrs", "Utilization", "Goal", "PTO Hours", "Status", "Budget",
-    "Budget Amount",
+    "Budget Amount", "Budget = Actual",
 }
 _NUMERIC_HEADERS = {"Actual Hrs", "Scheduled Hrs", "Difference"}
 
@@ -227,11 +227,12 @@ def build_person_workbook(
                 i.get("project_code", ""),
                 f"${budget_val:,.0f}",
                 i.get("description", ""),
+                i.get("budget_equals_actual", "No"),
             ])
             row_types.append(i.get("type"))
         ws = _write_sheet(
             wb, "Budget to Actual",
-            ["Project Code", "Budget Amount", "To be reviewed"], rows,
+            ["Project Code", "Budget Amount", "To be reviewed", "Budget = Actual"], rows,
         )
         for idx, t in enumerate(row_types, start=2):
             ws.cell(row=idx, column=3).font = _NEG_FONT if t == "negative" else _POS_FONT
