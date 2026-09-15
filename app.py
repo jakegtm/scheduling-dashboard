@@ -16,7 +16,7 @@ import streamlit as st
 
 
 from config import (
-    EMAIL_LOOKUP, INTERN_NAMES, STAFF_NAMES, NAME_ALIASES,
+    EMAIL_LOOKUP, STAFF_NAMES, NAME_ALIASES,
     POSITION_ORDER, PERSON_ROLE, _rank, DISPLAY_NAMES,
     DEFAULT_BUDGET_THRESHOLD, DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_PROJECTION_THRESHOLD_PCT,
@@ -33,6 +33,9 @@ from processors.variance        import (
 from processors.utilization import get_pto_schedule
 from processors.noncharge import (
     parse_noncharge_report, filter_noncharge, noncharge_totals,
+)
+from processors.time_entry import (
+    parse_time_coverage, previous_week, find_missing_time, format_week,
 )
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -237,6 +240,19 @@ def run_tracker(file_hash, _b):
     issues, tbd, owner_map = process_project_tracker(wb[sheet])
     gc.collect()
     return issues, tbd, sheet, owner_map
+
+@st.cache_data(show_spinner=False)
+def run_time_coverage(oa_hash, _oa_bytes):
+    """Per-person daily hours from the time report, plus the report's own
+    generated-on date (used to pick which week to check)."""
+    import io
+    try:
+        cov, report_date = parse_time_coverage(io.BytesIO(_oa_bytes))
+    except Exception:
+        cov, report_date = {}, None
+    gc.collect()
+    return cov, report_date
+
 
 @st.cache_data(show_spinner=False)
 def run_noncharge(oa_hash, _oa_bytes):
@@ -572,9 +588,11 @@ with st.spinner("🔄 Running analysis — please wait…") if _show_spinner els
         st.warning(f"Tracker error: {e}")
 
     noncharge_all = {}
+    time_coverage, time_report_date = {}, None
     try:
         if has_openair:
             noncharge_all = run_noncharge(oa_hash, oa_bytes)
+            time_coverage, time_report_date = run_time_coverage(oa_hash, oa_bytes)
     except Exception as e:
         st.warning(f"Non-charge error: {e}")
 
@@ -687,6 +705,16 @@ noncharge_data = filter_noncharge(
 )
 noncharge_summary = noncharge_totals(noncharge_data)
 
+# Who didn't enter their time in OpenAir last week. The roster comes from the
+# schedule (or EMAIL_LOOKUP as a fallback), not the report — people who entered
+# nothing don't appear in the report at all.
+missing_time, missing_week = {}, None
+if has_openair and time_report_date:
+    _mw_start, _mw_end = previous_week(time_report_date)
+    missing_week = format_week(_mw_start, _mw_end)
+    _roster = sorted(valid_people) if valid_people else sorted(EMAIL_LOOKUP)
+    missing_time = find_missing_time(time_coverage, _roster, _mw_start, _mw_end)
+
 # Empty selection is the single most common cause of a blank report — e.g.
 # early in a new month, before that month's tab has been scheduled. Say so
 # plainly instead of silently producing workbooks with no Hours tab.
@@ -773,6 +801,17 @@ for _person, _entries in noncharge_data.items():
         owners_data[p]["email"]      = _entries[0].get("person_email") or _lookup_email(p)
         owners_data[p]["first_name"] = _entries[0].get("first_name", p)
     owners_data[p]["noncharge"].extend(_entries)
+
+# Someone who entered no time at all has no tracker/budget/variance/non-charge
+# rows either, so nothing above would have added them — and they're precisely
+# the people who need the reminder. Seed them here.
+for _person, _info in missing_time.items():
+    p = _normalize_name(_person)
+    if not p or (valid_people and p not in valid_people):
+        continue
+    if not owners_data[p]["email"]:
+        owners_data[p]["email"]      = _info.get("person_email") or _lookup_email(p)
+        owners_data[p]["first_name"] = _info.get("first_name", p)
 
 # active_owners = everyone in valid_people who has an email
 active_owners = {
@@ -903,6 +942,17 @@ with tab3:
 
 with tab4:
     st.header("Actual vs Schedule Variance (OpenAir)")
+    if missing_time:
+        _none  = [p for p, m in missing_time.items() if m["status"] == "none"]
+        _short = [p for p, m in missing_time.items() if m["status"] == "partial"]
+        _parts = []
+        if _none:
+            _parts.append(f"**No time entered:** {', '.join(sorted(_none))}")
+        if _short:
+            _parts.append("**Partial:** " + ", ".join(
+                f"{p} ({missing_time[p]['hours']:g} hrs)" for p in sorted(_short)))
+        st.warning(f"⏰ Time entry for {missing_week} — " + " · ".join(_parts)
+                   + "  \nA reminder is added to these people's reports.")
     if not has_openair:
         st.info("ℹ️ No OpenAir report uploaded — showing scheduled hours with actual = 0.")
     if openair_error:
@@ -971,10 +1021,11 @@ for owner in all_owner_keys:
     first_name = data.get("first_name", owner)
     _display   = DISPLAY_NAMES.get(owner, owner)
     label = (f"**{first_name} ({_display})** — "
-             f"Tracker: {len(data['tracker'])} · "
-             f"Budget: {len(data['budget'])} · "
-             f"Util: {len(data['util'])} · "
-             f"Hours: {len(data['variance'])}")
+             f"Tracker: {len(data.get('tracker', []))} · "
+             f"Budget: {len(data.get('budget', []))} · "
+             f"Non-Charge: {len(data.get('noncharge', []))} · "
+             f"Hours: {len(data.get('variance', []))}"
+             + (" · ⏰ time entry" if owner in missing_time else ""))
     chk_key = f"chk_{owner}"
     if chk_key not in st.session_state:
         st.session_state[chk_key] = owner in st.session_state.selected_owners
@@ -1007,6 +1058,7 @@ def _build_payload(owner_list):
             tbd_projects     = tbd_projects,
             variance_issues  = variance_list,
             noncharge_data   = data.get("noncharge", []),
+            missing_time     = missing_time.get(owner),
             pto_schedule     = pto_schedule_data,
             pto_months       = _pto_month_list,
             has_openair      = has_openair,
@@ -1030,6 +1082,8 @@ def _tabs_included(person: dict) -> list[str]:
         tabs.append("Current Month Hours")
     if person["noncharge_data"]:
         tabs.append("Non-Charge Time")
+    if person.get("missing_time"):
+        tabs.append("⏰ Time entry reminder")
     person_pto = pto_schedule_data.get(person["owner"], {})
     if person_pto and any(person_pto.get(m, 0) for m in _pto_month_list):
         tabs.append("PTO")
