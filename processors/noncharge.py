@@ -1,123 +1,266 @@
-"""
-processors/noncharge.py
+from __future__ import annotations
+# ============================================================
+# processors/noncharge.py
+# ============================================================
+# Reads non-charge time from the OpenAir time report.
+#
+# Replaces the old "Utilization" tab, which read utilization %
+# out of the schedule workbook's "Utilization by Month" sheet.
+# This reads actual logged non-charge time instead, with the
+# task, notes and description, so people can be asked about it
+# directly.
+#
+# Report format (same file variance.py parses — the report now
+# carries three extra columns, which that parser ignores):
+#   Row 1:  Title row (skipped)
+#   Row 2:  Headers — "Project - Name", "Date", "Employee",
+#           "Time (Hours)", "Task", "Notes", "Description"
+#   Row 3+: One time entry per row
+#   Footer: a grand-total row and "Generated on:" /
+#           "Filter set applied:" rows, all skipped
+#
+# Non-charge time is any project matching VARIANCE_EXCLUDE_PREFIXES
+# ("GTM"), i.e. GTM - NONCHG / TRAINING / PTO / HOLIDAYS. That is
+# exactly the set variance.py excludes, so this tab shows the hours
+# the variance tab drops.
+# ============================================================
 
-Loads the TAS Team Time report (the new OpenAir export format) and builds the
-Non-Charge Time view that replaces the old Utilization tab.
-
-Report columns: Project - Name, Date, Employee, Time (Hours), Task, Notes, Description
-The file has one title row above the header and three footer rows at the bottom.
-"""
-
-import pandas as pd
-
-# Projects that represent non-charge time. Filtering on project matches the
-# task-prefix filter exactly (NONCHARGE HRS *, NCH *, TTG *, Available Time)
-# and is more robust to new task names being added.
-NONCHARGE_PROJECTS = (
-    "GTM - NONCHG",
-    "GTM - TRAINING",
-    "GTM - PTO",
-    "GTM - HOLIDAYS",
+from datetime import datetime, timedelta
+from config import (
+    EMAIL_LOOKUP,
+    FIRST_NAMES,
+    OPENAIR_EMPLOYEE_MAP,
+    VARIANCE_EXCLUDE_PREFIXES,
+    NONCHARGE_NO_NOTE_TASKS,
 )
 
-AVAILABLE_TIME_TASK = "Available Time"
+AVAILABLE_TIME_TASK = "available time"
 
-# Tasks that legitimately never carry a note, so we don't prompt for one.
-NO_NOTE_EXPECTED = {
-    "NONCHARGE HRS HOLIDAY",
-    "NONCHARGE HRS FLOATING HOLIDAY",
-    "NONCHARGE HRS PTO",
-    "NCH MATERNITY/PATERNITY/ADOPT",
-    "NCH BEREAVEMENT",
-    "NCH JURY DUTY",
-    "NCH PPL",
-}
+# The report packs multi-line note text onto one line with " | ".
+_NOTE_SEPARATOR = " | "
 
 
-def load_time_report(file) -> pd.DataFrame:
-    """Read the time report into a clean frame. Accepts a path or file-like object."""
-    df = pd.read_csv(file, skiprows=1, encoding="utf-8-sig")
-    df.columns = [str(c).strip() for c in df.columns]
-
-    # Drop the grand-total row and the "Generated on" / "Filter set applied" footers.
-    df = df[df["Employee"].notna() & (df["Employee"].astype(str).str.strip() != "")]
-
-    df["Date"] = pd.to_datetime(df["Date"], format="%m/%d/%Y", errors="coerce")
-    df = df[df["Date"].notna()]
-
-    df["Time (Hours)"] = pd.to_numeric(df["Time (Hours)"], errors="coerce").fillna(0.0)
-    for col in ("Project - Name", "Employee", "Task", "Notes", "Description"):
-        df[col] = df[col].fillna("").astype(str).str.strip()
-
-    df["Period"] = df["Date"].apply(half_month_period)
-    df["Is Non-Charge"] = df["Project - Name"].isin(NONCHARGE_PROJECTS)
-
-    return df.reset_index(drop=True)
+def _parse_date(s: str):
+    s = s.strip()
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    return None
 
 
-def half_month_period(d: pd.Timestamp) -> str:
-    """Bucket a date into a half-month period, e.g. 'Jan 1-15' / 'Jan 16-31'."""
-    month = d.strftime("%b")
+def _date_to_period(d) -> str:
+    """Half-month period label, e.g. 'September 1-15' / 'September 16-30'.
+    Must stay identical to variance.py's period labels so the app's period
+    selector drives both tabs."""
+    month_name = d.strftime("%B")
     if d.day <= 15:
-        return f"{month} 1-15"
-    last = d.days_in_month
-    return f"{month} 16-{last}"
+        return f"{month_name} 1-15"
+    last_day = (d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    return f"{month_name} 16-{last_day.day}"
 
 
-def build_noncharge(df: pd.DataFrame, periods=None, people=None) -> pd.DataFrame:
+def _is_noncharge(project_name: str) -> bool:
+    upper = project_name.strip().upper()
+    return any(upper.startswith(p.upper()) for p in VARIANCE_EXCLUDE_PREFIXES)
+
+
+def _clean_note(raw: str) -> str:
+    """Turn the report's ' | ' joins into real line breaks, and drop the
+    stray leading apostrophe Excel adds to text starting with '+'."""
+    text = (raw or "").strip()
+    if text.startswith("'"):
+        text = text[1:]
+    parts = [p.strip() for p in text.split(_NOTE_SEPARATOR)]
+    return "\n".join(p for p in parts if p)
+
+
+def parse_noncharge_report(file_obj) -> dict:
     """
-    Detail rows for the Non-Charge Time tab / export.
+    Parse non-charge time entries out of the OpenAir time report.
 
-    Available Time sorts to the top for each person, since that's the line
-    that actually needs an answer.
+    Returns:
+        {
+            "S. O'Donnell": [
+                {
+                    "person":         "S. O'Donnell",
+                    "date":           date(2026, 9, 8),
+                    "date_str":       "09/08/2026",
+                    "period":         "September 1-15",
+                    "project":        "GTM - NONCHG",
+                    "task":           "Available Time",
+                    "hours":          2.0,
+                    "notes":          "Mainly looked into mass emails...",
+                    "description":    "Researched more into ...",
+                    "available_time": True,
+                    "needs_response": True,
+                },
+                ...
+            ],
+        }
+
+    Each person's entries are sorted with Available Time first, then by date.
     """
-    nc = df[df["Is Non-Charge"]].copy()
+    import csv, io as _io
 
-    if periods:
-        nc = nc[nc["Period"].isin(periods)]
-    if people:
-        nc = nc[nc["Employee"].isin(people)]
+    if hasattr(file_obj, "read"):
+        content = file_obj.read()
+        if isinstance(content, bytes):
+            content = content.decode("utf-8-sig", errors="replace")  # strip BOM
+        file_obj = _io.StringIO(content)
 
-    nc["Available Time"] = nc["Task"] == AVAILABLE_TIME_TASK
-    nc["Needs Response"] = nc["Available Time"] | (
-        (nc["Notes"] == "")
-        & (nc["Description"] == "")
-        & (~nc["Task"].isin(NO_NOTE_EXPECTED))
-    )
-    nc["Response"] = ""
+    reader = list(csv.reader(file_obj))
+    result: dict = {}
 
-    nc = nc.sort_values(
-        ["Employee", "Available Time", "Date"], ascending=[True, False, True]
-    )
+    # ---- Locate the header row and map columns by name ----
+    header_idx = None
+    col_project = col_date = col_employee = col_hours = None
+    col_task = col_notes = col_description = None
 
-    return nc[[
-        "Employee", "Date", "Period", "Project - Name", "Task",
-        "Time (Hours)", "Notes", "Description", "Needs Response", "Response",
-    ]].reset_index(drop=True)
+    for i, row in enumerate(reader):
+        row_lower = [str(c).strip().lower() for c in row]
+        if "date" in row_lower and "employee" in row_lower:
+            header_idx = i
+            for j, h in enumerate(row_lower):
+                if "project" in h:        col_project     = j
+                elif h == "date":         col_date        = j
+                elif "employee" in h:     col_employee    = j
+                elif "hour" in h:         col_hours       = j
+                elif h == "task":         col_task        = j
+                elif h == "notes":        col_notes       = j
+                elif h == "description":  col_description = j
+            break
+
+    if header_idx is None or col_employee is None:
+        return result  # unrecognised format
+
+    # The Task/Notes/Description columns only exist on the newer report. If an
+    # older export is uploaded, fall back gracefully rather than blowing up.
+    if col_task is None:
+        return result
+
+    for row in reader[header_idx + 1:]:
+        needed = [x for x in (col_project, col_date, col_employee, col_hours, col_task)
+                  if x is not None]
+        if not needed or len(row) <= max(needed):
+            continue
+
+        def _cell(idx):
+            return str(row[idx]).strip() if idx is not None and idx < len(row) else ""
+
+        project_name = _cell(col_project)
+        date_str     = _cell(col_date)
+        employee_str = _cell(col_employee)
+        hours_str    = _cell(col_hours)
+        task         = _cell(col_task)
+
+        # Footer rows ("Generated on: ...") have no employee — skipped here.
+        if not employee_str or not date_str or not project_name:
+            continue
+        if not _is_noncharge(project_name):
+            continue
+
+        try:
+            hours = float(hours_str.replace(",", ""))
+        except ValueError:
+            continue
+        if hours <= 0:
+            continue
+
+        d = _parse_date(date_str)
+        if d is None:
+            continue
+
+        # Map "LastName, FirstName" to the schedule's name key. The explicit
+        # map handles ambiguous last names (two O'Donnells).
+        if employee_str in OPENAIR_EMPLOYEE_MAP:
+            person = OPENAIR_EMPLOYEE_MAP[employee_str]
+        else:
+            person = employee_str.split(",")[0].strip() if "," in employee_str else employee_str
+
+        notes       = _clean_note(_cell(col_notes))
+        description = _clean_note(_cell(col_description))
+
+        is_available = task.strip().lower() == AVAILABLE_TIME_TASK
+
+        # Ask for a response on Available Time always, and on any entry logged
+        # with no explanation at all — except tasks where a note would be
+        # meaningless (holidays, PTO, bereavement, jury duty).
+        needs_response = is_available or (
+            not notes
+            and not description
+            and task.strip().upper() not in NONCHARGE_NO_NOTE_TASKS
+        )
+
+        result.setdefault(person, []).append({
+            "person":         person,
+            "date":           d,
+            "date_str":       d.strftime("%m/%d/%Y"),
+            "period":         _date_to_period(d),
+            "project":        project_name,
+            "task":           task,
+            "hours":          hours,
+            "notes":          notes,
+            "description":    description,
+            "available_time": is_available,
+            "needs_response": needs_response,
+            "person_email":   EMAIL_LOOKUP.get(person),
+            "first_name":     FIRST_NAMES.get(person, person),
+        })
+
+    # Available Time first, then chronological.
+    for person in result:
+        result[person].sort(key=lambda e: (not e["available_time"], e["date"]))
+
+    return result
 
 
-def noncharge_summary(df: pd.DataFrame, periods=None) -> pd.DataFrame:
-    """Hours by person by task, with an Available Time column pulled out."""
-    nc = df[df["Is Non-Charge"]].copy()
-    if periods:
-        nc = nc[nc["Period"].isin(periods)]
+def filter_noncharge(data: dict, periods: list = None, people: list = None) -> dict:
+    """Narrow parsed data to the selected periods / roster. Returns the same
+    shape, dropping people who have nothing left."""
+    out = {}
+    for person, entries in data.items():
+        if people and person not in people:
+            continue
+        rows = entries
+        if periods:
+            wanted = set(periods)
+            rows = [e for e in rows if e["period"] in wanted]
+        if rows:
+            out[person] = rows
+    return out
 
-    summary = nc.pivot_table(
-        index="Employee", columns="Task", values="Time (Hours)",
-        aggfunc="sum", fill_value=0.0,
-    )
-    summary["Total Non-Charge"] = summary.sum(axis=1)
-    return summary.sort_values("Total Non-Charge", ascending=False)
+
+def flatten_noncharge(data: dict) -> list:
+    """All entries as one flat list — for the app's table view."""
+    return [e for entries in data.values() for e in entries]
 
 
-def actual_hours(df: pd.DataFrame) -> pd.DataFrame:
+def noncharge_totals(data: dict) -> list:
     """
-    Chargeable actuals by person / project / period — the replacement feed for
-    variance.py, which previously read this from the OpenAir export.
+    Per-person rollup for the tab's summary table.
+
+    Returns a list of dicts sorted by most non-charge hours first.
     """
-    ch = df[~df["Is Non-Charge"]]
-    return (
-        ch.groupby(["Employee", "Project - Name", "Period"], as_index=False)["Time (Hours)"]
-        .sum()
-        .rename(columns={"Time (Hours)": "Actual Hours"})
-    )
+    totals = []
+    for person, entries in data.items():
+        available = sum(e["hours"] for e in entries if e["available_time"])
+        pto       = sum(e["hours"] for e in entries if "PTO" in e["task"].upper())
+        holiday   = sum(e["hours"] for e in entries if "HOLIDAY" in e["task"].upper())
+        training  = sum(e["hours"] for e in entries if "TRAINING" in e["task"].upper())
+        total     = sum(e["hours"] for e in entries)
+        totals.append({
+            "person":         person,
+            "first_name":     FIRST_NAMES.get(person, person),
+            "person_email":   EMAIL_LOOKUP.get(person),
+            "available_time": available,
+            "pto":            pto,
+            "holiday":        holiday,
+            "training":       training,
+            "other":          total - available - pto - holiday - training,
+            "total":          total,
+            "needs_response": sum(1 for e in entries if e["needs_response"]),
+        })
+    totals.sort(key=lambda t: t["total"], reverse=True)
+    return totals
