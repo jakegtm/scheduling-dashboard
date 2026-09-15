@@ -21,9 +21,11 @@ DEFAULT_VARIANCE_MIN = 5    # Hours under-worked threshold (displayed as positiv
 DEFAULT_VARIANCE_MAX = 0    # Hours over-worked threshold (flag if actual exceeds scheduled by more than this)
 
 # --- ROLE RULES ---
-# Names of staff who only receive their own variance rows (not all team rows).
-# Add more names here as needed (e.g. when more analysts are hired).
-INTERN_NAMES = {"Avington"}  # kept for backwards compatibility
+# No interns on the team — everyone is staff or a project owner.
+# Retained as an empty set so the import in app.py keeps working; the
+# separate intern filtering it drove was redundant with STAFF_NAMES
+# (staff never accumulate other people's rows) and has been removed.
+INTERN_NAMES: set = set()
 
 # Staff who only receive their own variance rows (not all project rows).
 # Project owners (managers/directors) are everyone NOT in this set.
@@ -48,6 +50,16 @@ NONCHARGE_NO_NOTE_TASKS = {
     "NCH JURY DUTY",
     "NCH PPL",
 }
+
+# --- TIME ENTRY CHECK ---
+# Flags people who didn't enter (or under-entered) their time in OpenAir for
+# the previous full Mon-Sun week. The reminder appears on the Current Month
+# Hours tab of their workbook.
+# Set TIME_ENTRY_EXPECTED_WEEKLY_HOURS to 0 to only flag people who entered
+# nothing at all, and never flag partial weeks.
+TIME_ENTRY_EXPECTED_WEEKLY_HOURS = 40
+# Daily totals below this are treated as no entry (guards against a stray 0).
+TIME_ENTRY_MIN_HOURS_TO_COUNT = 0.01
 
 # --- PURPLE FILL DETECTION (Month tab "done" cells) ---
 PURPLE_HEX_CODES = {
@@ -76,7 +88,7 @@ PERSON_ROLE = {
     "McGrogan":     "SR",
     "S. O'Donnell": "AN",
     "Avington":     "AN",
-    "J. O'Donnell": "IN",
+    "J. O'Donnell": "AN",
 }
 
 def _rank(name: str) -> tuple:
