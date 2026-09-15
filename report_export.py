@@ -26,6 +26,11 @@ _NEG_FONT    = Font(name="Arial", color="C0392B", bold=True, size=10.5)  # over-
 _OVER_FONT   = Font(name="Arial", color="E67E22", bold=True, size=10.5)  # worked-more-than-scheduled
 _POS_FONT    = Font(name="Arial", color="1A6B2F", size=10.5)             # on-track / positive
 
+# Missing-time-entry reminder banner (amber, to read as urgent without
+# competing with the red used for flagged variances)
+_BANNER_FILL = PatternFill(start_color="FDEBD0", end_color="FDEBD0", fill_type="solid")
+_BANNER_FONT = Font(name="Arial", color="9C4500", bold=True, size=11)
+
 _THIN   = Side(style="thin", color="D9D9D9")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 
@@ -73,20 +78,42 @@ def _autofit_widths(all_headers: list, display_rows: list) -> list:
     return widths
 
 
-def _write_sheet(wb, title, headers, rows, response_col=True):
+def _data_start_row(banner=None) -> int:
+    """First data row in a sheet written by _write_sheet (3 with a banner, else 2)."""
+    return 3 if banner else 2
+
+
+def _write_sheet(wb, title, headers, rows, response_col=True, banner=None):
     """Create a sheet, write a styled + autofit + zebra-striped table.
     Returns the worksheet so callers can layer extra per-cell styling
-    (e.g. coloring a specific "Difference" cell red/orange) on top."""
+    (e.g. coloring a specific "Difference" cell red/orange) on top.
+
+    `banner` writes an attention row above the header — used for the
+    missing-time-entry reminder. When a banner is present the header lands
+    on row 2 and data starts on row 3, so callers doing per-row styling
+    must offset by _data_start_row(banner)."""
     ws = wb.create_sheet(title=title[:31])  # Excel sheet-name length limit
     ws.sheet_properties.tabColor = _BRAND
     all_headers = list(headers) + (["Response"] if response_col else [])
     n_cols = len(all_headers)
 
+    # ── banner row (optional) ──
+    header_row = 1
+    if banner:
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+        cell = ws.cell(row=1, column=1, value=banner)
+        cell.fill      = _BANNER_FILL
+        cell.font      = _BANNER_FONT
+        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        cell.border    = _BORDER
+        ws.row_dimensions[1].height = max(22, -(-len(banner) // max(n_cols * 12, 1)) * 15)
+        header_row = 2
+
     # ── header row ──
     ws.append(all_headers)
-    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[header_row].height = 20
     for col_idx in range(1, n_cols + 1):
-        cell = ws.cell(row=1, column=col_idx)
+        cell = ws.cell(row=header_row, column=col_idx)
         cell.fill      = _HEADER_FILL
         cell.font      = _HEADER_FONT
         cell.border    = _BORDER
@@ -104,7 +131,7 @@ def _write_sheet(wb, title, headers, rows, response_col=True):
     widths = _autofit_widths(all_headers, display_rows)
 
     for r_offset, row_values in enumerate(display_rows):
-        row_idx  = r_offset + 2
+        row_idx  = r_offset + header_row + 1
         is_even  = (r_offset % 2 == 1)
         max_lines = 1
         for col_idx in range(1, n_cols + 1):
@@ -136,7 +163,7 @@ def _write_sheet(wb, title, headers, rows, response_col=True):
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = f"A{header_row + 1}"
 
     # Print-friendly: landscape + fit-to-width so a wide table doesn't spill
     # across multiple pages if someone prints or exports this to PDF.
@@ -156,6 +183,7 @@ def build_person_workbook(
     tbd_projects: list,
     variance_issues: list,
     noncharge_data: list  = None,
+    missing_time: dict    = None,
     pto_schedule: dict    = None,
     pto_months: list      = None,
     has_openair: bool     = False,
@@ -174,6 +202,11 @@ def build_person_workbook(
     wb = Workbook()
     wb.remove(wb.active)  # drop the default blank sheet
     any_section = False
+
+    # Missing-time-entry reminder. Shown as a banner on the Current Month Hours
+    # tab; if that tab isn't generated for this person, it falls back to the
+    # Summary sheet so the reminder still reaches them.
+    time_banner = (missing_time or {}).get("message")
 
     # ── Summary / cover sheet ────────────────────────────────
     cover = wb.create_sheet("Summary")
@@ -250,6 +283,12 @@ def build_person_workbook(
         _write_sheet(wb, "TBD Projects", ["Project Code", "Status", "Budget", "Notes"], rows)
         any_section = True
 
+    if time_banner and not variance_issues:
+        cover.cell(row=next_row, column=1, value=time_banner).font = _BANNER_FONT
+        cover.cell(row=next_row, column=1).fill = _BANNER_FILL
+        next_row += 2
+        any_section = True  # a missing-time reminder alone is worth sending
+
     # ── Current Month Hours (all hours, flagged + matches) ──────
     if variance_issues:
         _sorted_var = sorted(
@@ -292,11 +331,12 @@ def build_person_workbook(
         )
         diff_col     = 5 if is_staff else 6
         response_col = len(headers) + 1  # _write_sheet appends "Response" as the last column
-        ws = _write_sheet(wb, "Current Month Hours", headers, rows)
+        ws = _write_sheet(wb, "Current Month Hours", headers, rows, banner=time_banner)
+        base_row = _data_start_row(time_banner)
 
         _optional_font = Font(name="Arial", size=10, italic=True, color="999999")
         for r_offset, (diff, is_var) in enumerate(zip(diffs, is_variance_flags)):
-            row_idx = r_offset + 2
+            row_idx = r_offset + base_row
             # diff = actual - scheduled, so diff < 0 == worked LESS than scheduled.
             # _NEG_FONT is the worked-less color; _OVER_FONT is worked-more.
             ws.cell(row=row_idx, column=diff_col).font = (
