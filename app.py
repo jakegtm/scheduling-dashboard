@@ -998,10 +998,7 @@ def _build_payload(owner_list):
         if owner not in active_owners:
             continue
         data          = active_owners[owner]
-        is_intern     = owner in INTERN_NAMES
         variance_list = data.get("variance", [])
-        if is_intern:
-            variance_list = [v for v in variance_list if v.get("person") == owner]
         payload.append(dict(
             owner            = owner,
             first_name       = data.get("first_name", owner),
