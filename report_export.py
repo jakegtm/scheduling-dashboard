@@ -51,7 +51,7 @@ _NUMERIC_HEADERS = {"Actual Hrs", "Scheduled Hrs", "Difference", "Hrs"}
 _MIN_WIDTH      = 10
 _MAX_WIDTH      = 32
 _MAX_WRAP_WIDTH = 48
-_CHARS_PER_LINE = 46  # used to estimate wrapped row height
+_CHARS_PER_LINE = 46  # fallback line-width estimate (row height now uses actual column width)
 
 
 def _next_monday() -> str:
@@ -144,7 +144,15 @@ def _write_sheet(wb, title, headers, rows, response_col=True, banner=None):
                 cell.alignment = _LEFT_TOP
                 text = "" if cell.value is None else str(cell.value)
                 if text:
-                    max_lines = max(max_lines, -(-len(text) // _CHARS_PER_LINE))
+                    # Count wrapped lines against this column's actual width,
+                    # and respect explicit line breaks — a multi-line note
+                    # needs a row per segment, not per total character count.
+                    per_line = max(10, int(widths[col_idx - 1]) - 2)
+                    lines = sum(
+                        max(1, -(-len(seg) // per_line))
+                        for seg in text.split("\n")
+                    )
+                    max_lines = max(max_lines, lines)
             elif header in _CENTER_HEADERS:
                 cell.alignment = _CENTER_MID
             else:
@@ -357,8 +365,8 @@ def build_person_workbook(
         rows, flags = [], []
         for e in noncharge_data:
             if e.get("available_time"):
-                prompt = ("This was logged as Available Time. What were you working on, "
-                          "and is there project work that should be scheduled for you?")
+                prompt = ("This was logged as Available Time. Is there project work "
+                          "that should be scheduled for you?")
             elif e.get("needs_response"):
                 prompt = "No note was logged for this entry. What was this time spent on?"
             else:
