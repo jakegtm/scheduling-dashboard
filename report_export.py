@@ -34,14 +34,14 @@ _LEFT_MID    = Alignment(horizontal="left",   vertical="center", wrap_text=False
 _CENTER_MID  = Alignment(horizontal="center", vertical="center", wrap_text=False)
 
 # Columns that hold long free-text and should wrap instead of stretching forever
-_WRAP_HEADERS = {"To be reviewed", "Notes", "Response"}
+_WRAP_HEADERS = {"To be reviewed", "Notes", "Description", "Response"}
 # Columns that read better centered (short numbers/labels)
 _CENTER_HEADERS = {
     "Actual Hrs", "Scheduled Hrs", "Difference", "Chargeable Hrs",
     "Remaining Hrs", "Utilization", "Goal", "PTO Hours", "Status", "Budget",
-    "Budget Amount", "Budget = Actual",
+    "Budget Amount", "Budget = Actual", "Hrs", "Date",
 }
-_NUMERIC_HEADERS = {"Actual Hrs", "Scheduled Hrs", "Difference"}
+_NUMERIC_HEADERS = {"Actual Hrs", "Scheduled Hrs", "Difference", "Hrs"}
 
 _MIN_WIDTH      = 10
 _MAX_WIDTH      = 32
@@ -155,7 +155,7 @@ def build_person_workbook(
     budget_issues: list,
     tbd_projects: list,
     variance_issues: list,
-    util_data: list       = None,
+    noncharge_data: list  = None,
     pto_schedule: dict    = None,
     pto_months: list      = None,
     has_openair: bool     = False,
@@ -312,39 +312,42 @@ def build_person_workbook(
                 resp_cell.fill  = _ZEBRA_FILL if (r_offset % 2 == 1) else PatternFill(fill_type=None)
         any_section = True
 
-    # ── Utilization ───────────────────────────────────────────
-    if util_data:
-        person_util = [u for u in util_data if u.get("person") == owner]
-        if person_util:
-            u = person_util[0]
-            util_pct = u.get("utilization_pct")
-            goal_pct = u.get("goal_pct")
-            diff_pct = u.get("difference_pct")
-
-            if diff_pct is not None and diff_pct < -10:
-                question = ("What do you plan to do with your non-charge time? "
-                            "Are there any projects you know of that aren't in the schedule yet?")
-            elif diff_pct is not None and diff_pct > 10:
-                question = ("Is there any project work you could use assistance with, "
-                            "or places where we can shift hours?")
+    # ── Non-Charge Time ───────────────────────────────────────
+    if noncharge_data:
+        rows, flags = [], []
+        for e in noncharge_data:
+            if e.get("available_time"):
+                prompt = ("This was logged as Available Time. What were you working on, "
+                          "and is there project work that should be scheduled for you?")
+            elif e.get("needs_response"):
+                prompt = "No note was logged for this entry. What was this time spent on?"
             else:
-                question = ""
+                prompt = ""
+            rows.append([
+                e.get("date_str", ""), e.get("task", ""), e.get("hours", 0),
+                e.get("notes", "") or "—", e.get("description", "") or "—", prompt,
+            ])
+            flags.append(bool(e.get("needs_response")))
 
-            rows = [[
-                f"{util_pct:.1f}%" if util_pct is not None else "-",
-                f"{goal_pct:.0f}%" if goal_pct is not None else "-",
-                f"{diff_pct:+.1f}%" if diff_pct is not None else "-",
-                u.get("chargeable", "-"), u.get("remaining", "-"),
-                question,
-            ]]
-            ws = _write_sheet(wb, "Utilization",
-                              ["Utilization", "Goal", "Difference", "Chargeable Hrs",
-                               "Remaining Hrs", "To be reviewed"], rows)
-            if diff_pct is not None:
-                ws.cell(row=2, column=3).font = (
-                    _NEG_FONT if diff_pct > 10 else (_OVER_FONT if diff_pct < -10 else _POS_FONT)
-                )
-            any_section = True
+        headers = ["Date", "Task", "Hrs", "Notes", "Description", "To be reviewed"]
+        response_col = len(headers) + 1  # _write_sheet appends "Response" last
+        ws = _write_sheet(wb, "Non-Charge Time", headers, rows)
+
+        _optional_font = Font(name="Arial", size=10, italic=True, color="999999")
+        for r_offset, (e, needs) in enumerate(zip(noncharge_data, flags)):
+            row_idx = r_offset + 2
+            if e.get("available_time"):
+                # Available Time is the line that most needs an answer — make the
+                # task cell stand out the way a flagged variance does.
+                ws.cell(row=row_idx, column=2).font = _NEG_FONT
+            if not needs:
+                # Entry already has a note: mark the Response cell optional,
+                # matching the Current Month Hours tab's treatment.
+                resp_cell = ws.cell(row=row_idx, column=response_col)
+                resp_cell.value = "Optional"
+                resp_cell.font  = _optional_font
+                resp_cell.fill  = _ZEBRA_FILL if (r_offset % 2 == 1) else PatternFill(fill_type=None)
+        any_section = True
 
     # ── PTO Schedule ─────────────────────────────────────────
     if pto_schedule and pto_months:
