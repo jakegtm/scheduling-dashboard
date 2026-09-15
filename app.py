@@ -30,7 +30,10 @@ from processors.variance        import (
     compute_variances, get_available_months, filter_by_months,
     get_schedule_periods,
 )
-from processors.utilization import process_utilization, get_pto_schedule
+from processors.utilization import get_pto_schedule
+from processors.noncharge import (
+    parse_noncharge_report, filter_noncharge, noncharge_totals,
+)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -236,12 +239,15 @@ def run_tracker(file_hash, _b):
     return issues, tbd, sheet, owner_map
 
 @st.cache_data(show_spinner=False)
-def run_utilization(file_hash, _b, month):
-    wb = _load_wb(file_hash, _b)
+def run_noncharge(oa_hash, _oa_bytes):
+    """Parse non-charge time from the OpenAir report. Keyed on the OpenAir
+    file hash — unlike the old utilization data, this comes from the time
+    report, not the schedule workbook."""
+    import io
     try:
-        data = process_utilization(wb, target_month=month)
+        data = parse_noncharge_report(io.BytesIO(_oa_bytes))
     except Exception:
-        data = []
+        data = {}
     gc.collect()
     return data
 
@@ -565,11 +571,12 @@ with st.spinner("🔄 Running analysis — please wait…") if _show_spinner els
     except Exception as e:
         st.warning(f"Tracker error: {e}")
 
-    util_data = []
+    noncharge_all = {}
     try:
-        util_data = run_utilization(file_hash, sched_bytes, active_month)
+        if has_openair:
+            noncharge_all = run_noncharge(oa_hash, oa_bytes)
     except Exception as e:
-        st.warning(f"Utilization error: {e}")
+        st.warning(f"Non-charge error: {e}")
 
     pto_schedule_data = {}
     try:
@@ -672,6 +679,14 @@ try:
 except Exception:
     pass
 
+# Non-charge time honours the same period selector as the variance tab.
+noncharge_data = filter_noncharge(
+    noncharge_all,
+    periods=selected_months or None,
+    people=sorted(valid_people) if valid_people else None,
+)
+noncharge_summary = noncharge_totals(noncharge_data)
+
 # Empty selection is the single most common cause of a blank report — e.g.
 # early in a new month, before that month's tab has been scheduled. Say so
 # plainly instead of silently producing workbooks with no Hours tab.
@@ -690,7 +705,7 @@ if selected_months and not all_hours_issues and not var_error:
 # ============================================================
 owners_data = defaultdict(lambda: {
     "email": None, "first_name": "there",
-    "tracker": [], "budget": [], "variance": [], "util": [],
+    "tracker": [], "budget": [], "variance": [], "noncharge": [],
 })
 
 # Seed ALL valid_people who have emails so nobody is missed
@@ -750,14 +765,14 @@ for v in all_hours_issues:
             owners_data[proj_owner]["email"] = _lookup_email(proj_owner)
         owners_data[proj_owner]["variance"].append(v)
 
-for u in util_data:
-    p = _normalize_name(u.get("person", ""))
+for _person, _entries in noncharge_data.items():
+    p = _normalize_name(_person)
     if not p or (valid_people and p not in valid_people):
         continue
     if not owners_data[p]["email"]:
-        owners_data[p]["email"]      = u.get("person_email") or _lookup_email(p)
-        owners_data[p]["first_name"] = u.get("first_name", p)
-    owners_data[p]["util"].append(u)
+        owners_data[p]["email"]      = _entries[0].get("person_email") or _lookup_email(p)
+        owners_data[p]["first_name"] = _entries[0].get("first_name", p)
+    owners_data[p]["noncharge"].extend(_entries)
 
 # active_owners = everyone in valid_people who has an email
 active_owners = {
@@ -771,7 +786,7 @@ active_owners = {
 # ============================================================
 tab1, tab2, tab3, tab4 = st.tabs([
     "📋 Project Tracker", "💰 Budget to Actual",
-    "📈 Utilization",     "📊 Variance (OpenAir)"])
+    "🕗 Non-Charge Time", "📊 Variance (OpenAir)"])
 
 with tab1:
     st.header("Project Tracker — Known Projects")
@@ -836,22 +851,55 @@ with tab2:
                 use_container_width=True, hide_index=True)
 
 with tab3:
-    st.header(f"Utilization — {active_month}")
-    if not util_data:
-        st.warning("No utilization data found. Make sure the workbook has a "
-                   "'Utilization by Month' tab.")
+    st.header("Non-Charge Time")
+    if not has_openair:
+        st.info("ℹ️ Upload the time report to see non-charge time.")
+    elif not selected_months:
+        st.warning("Select at least one period above.")
+    elif not noncharge_data:
+        st.success("✅ No non-charge time logged in the selected period(s).")
     else:
+        _avail_total = sum(t["available_time"] for t in noncharge_summary)
+        _resp_total  = sum(t["needs_response"] for t in noncharge_summary)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Non-Charge Hours", f"{sum(t['total'] for t in noncharge_summary):,.1f}")
+        m2.metric("🟡 Available Time", f"{_avail_total:,.1f}")
+        m3.metric("Entries Needing a Response", _resp_total)
+
+        if len(selected_months) > 1:
+            st.info(f"Showing across {len(selected_months)} periods: "
+                    f"{', '.join(selected_months)}")
+
+        st.subheader("By Person")
         st.dataframe(
-            [{"Role": u.get("role",""), "Person": u.get("person",""),
-              "Chargeable": u.get("chargeable","-"), "Holiday": u.get("holiday","-"),
-              "PTO": u.get("pto","-"), "Month Total": u.get("month_total","-"),
-              "Remaining": u.get("remaining","-"),
-              "Utilization": f"{u['utilization_pct']:.1f}%" if u.get("utilization_pct") is not None else "-",
-              "Goal":        f"{u['goal_pct']:.0f}%"        if u.get("goal_pct")        is not None else "-",
-              "Difference":  f"{u['difference_pct']:+.1f}%" if u.get("difference_pct") is not None else "-",
-              "Has Email":   "✅" if u.get("person_email") else "❌"}
-             for u in util_data],
+            [{"Person": DISPLAY_NAMES.get(t["person"], t["person"]),
+              "Available Time": t["available_time"],
+              "Training": t["training"], "PTO": t["pto"], "Holiday": t["holiday"],
+              "Other": round(t["other"], 1), "Total": t["total"],
+              "Needs Response": t["needs_response"],
+              "Has Email": "✅" if t["person_email"] else "❌"}
+             for t in sorted(noncharge_summary, key=lambda t: _rank(t["person"]))],
             use_container_width=True, hide_index=True)
+
+        st.subheader("Detail")
+        _only_flagged = st.checkbox(
+            "Only show entries needing a response", value=True, key="nc_flagged")
+        _detail = [e for entries in noncharge_data.values() for e in entries
+                   if e["needs_response"] or not _only_flagged]
+        _detail.sort(key=lambda e: (_rank(e["person"]), not e["available_time"], e["date"]))
+        if not _detail:
+            st.success("✅ Every non-charge entry has a note.")
+        else:
+            st.dataframe(
+                [{"Person": DISPLAY_NAMES.get(e["person"], e["person"]),
+                  "Date": e["date_str"], "Task": e["task"],
+                  "Hrs": e["hours"],
+                  "Notes": e["notes"] or "—",
+                  "Description": e["description"] or "—",
+                  "Flag": "🟡 Available Time" if e["available_time"]
+                          else ("⚠️ No note" if e["needs_response"] else "")}
+                 for e in _detail],
+                use_container_width=True, hide_index=True)
 
 with tab4:
     st.header("Actual vs Schedule Variance (OpenAir)")
@@ -887,7 +935,7 @@ with tab4:
 st.divider()
 st.header("📊 Combined Reports")
 st.caption("One Excel workbook per person · Project Tracker · Budget · "
-           "TBD/Pending SOW · Variance · Utilization · PTO — "
+           "TBD/Pending SOW · Variance · Non-Charge Time · PTO — "
            "all packaged into a single ZIP for you to save and distribute.")
 
 if not active_owners:
@@ -961,7 +1009,7 @@ def _build_payload(owner_list):
             budget_issues    = data.get("budget", []),
             tbd_projects     = tbd_projects,
             variance_issues  = variance_list,
-            util_data        = util_data,
+            noncharge_data   = data.get("noncharge", []),
             pto_schedule     = pto_schedule_data,
             pto_months       = _pto_month_list,
             has_openair      = has_openair,
@@ -983,8 +1031,8 @@ def _tabs_included(person: dict) -> list[str]:
         tabs.append("TBD")
     if person["variance_issues"]:
         tabs.append("Current Month Hours")
-    if any(u.get("person") == person["owner"] for u in (util_data or [])):
-        tabs.append("Utilization")
+    if person["noncharge_data"]:
+        tabs.append("Non-Charge Time")
     person_pto = pto_schedule_data.get(person["owner"], {})
     if person_pto and any(person_pto.get(m, 0) for m in _pto_month_list):
         tabs.append("PTO")
