@@ -31,7 +31,23 @@ STAFF_NAMES = {"Avington", "S. O'Donnell", "J. O'Donnell", "McGrogan"}
 
 # Project code prefixes to exclude from variance analysis.
 # GTM internal/non-chargeable codes (NONCHG, TRAINING, HOLIDAYS, etc.) should not appear.
+# The Non-Charge tab uses this same set in reverse — it shows exactly these projects.
 VARIANCE_EXCLUDE_PREFIXES = {"GTM"}
+
+# --- NON-CHARGE TAB ---
+# Tasks where a blank note is expected and no response should be requested.
+# Nobody needs to explain why they took a holiday. Every other non-charge task
+# logged with no note and no description gets flagged for a response.
+# Match on the task name exactly as it appears in the report, upper-cased.
+NONCHARGE_NO_NOTE_TASKS = {
+    "NONCHARGE HRS HOLIDAY",
+    "NONCHARGE HRS FLOATING HOLIDAY",
+    "NONCHARGE HRS PTO",
+    "NCH MATERNITY/PATERNITY/ADOPT",
+    "NCH BEREAVEMENT",
+    "NCH JURY DUTY",
+    "NCH PPL",
+}
 
 # --- PURPLE FILL DETECTION (Month tab "done" cells) ---
 PURPLE_HEX_CODES = {
