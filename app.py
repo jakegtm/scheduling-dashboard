@@ -22,7 +22,8 @@ from config import (
     DEFAULT_PROJECTION_THRESHOLD_PCT,
     DEFAULT_VARIANCE_MIN, DEFAULT_VARIANCE_MAX,
 )
-from report_export import build_person_workbook, build_reports_zip
+from report_export import (build_person_workbook, build_reports_zip,
+                           build_consolidated_noncharge)
 from processors.budget_actual   import process_budget_actual
 from processors.project_tracker import process_project_tracker
 from processors.variance        import (
@@ -33,6 +34,7 @@ from processors.variance        import (
 from processors.utilization import get_pto_schedule
 from processors.noncharge import (
     parse_noncharge_report, filter_noncharge, noncharge_totals,
+    months_from_periods, periods_in_months,
 )
 from processors.time_entry import (
     parse_time_coverage, previous_week, find_missing_time, format_week,
@@ -1119,6 +1121,49 @@ def _included_count(zip_bytes: bytes) -> int:
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         return len(zf.namelist())
 
+
+# ---- Consolidated non-charge report (whole team, whole month) ----
+# Scoped to the full month behind the selected period(s), not the half-month
+# selector — "all the non-charge time for the month".
+_nc_months        = months_from_periods(selected_months)
+_nc_month_periods = periods_in_months(noncharge_all, _nc_months)
+if _nc_months and not _nc_month_periods:
+    # Month selected but nothing logged in it. Must stay empty — passing
+    # periods=None here would mean "no filter" and dump the whole year.
+    _nc_consolidated = {}
+else:
+    _nc_consolidated = filter_noncharge(
+        noncharge_all,
+        periods=_nc_month_periods or None,
+        people=sorted(valid_people) if valid_people else None,
+    )
+_nc_year  = next((e["date"].year for v in _nc_consolidated.values() for e in v), None)
+_nc_label = (" / ".join(_nc_months) + (f" {_nc_year}" if _nc_year else "")).strip() \
+            or "All periods"
+
+_nc_bytes = b""
+if _nc_consolidated:
+    try:
+        _nc_bytes = build_consolidated_noncharge(
+            _nc_consolidated, month_label=_nc_label, periods=_nc_month_periods,
+            display_names=DISPLAY_NAMES, rank_fn=_rank)
+    except Exception as e:
+        st.warning(f"Consolidated non-charge report error: {e}")
+
+_nc_entries = sum(len(v) for v in _nc_consolidated.values())
+st.download_button(
+    f"⬇️ Download Consolidated Non-Charge Report — {_nc_label or 'month'} "
+    f"({len(_nc_consolidated)} people, {_nc_entries} entries)",
+    data=_nc_bytes,
+    file_name=f"noncharge_{(_nc_label or 'month').replace(' ', '_').replace('/', '-')}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    disabled=not _nc_bytes,
+    use_container_width=True,
+)
+st.caption("One workbook covering the whole team for the month — every "
+           "non-charge entry with its notes and description. This is a review "
+           "copy for managers and is **not** included in the team ZIP below.")
+st.divider()
 
 col_b1, col_b2 = st.columns(2)
 with col_b1:
