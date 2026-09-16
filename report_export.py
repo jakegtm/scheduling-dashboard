@@ -418,6 +418,90 @@ def build_person_workbook(
     return buf.getvalue()
 
 
+def build_consolidated_noncharge(
+    noncharge_by_person: dict,
+    month_label: str = "",
+    periods: list = None,
+    display_names: dict = None,
+    rank_fn=None,
+) -> bytes:
+    """
+    One workbook covering every person's non-charge time for the month.
+
+    Unlike the per-person workbooks this is a review document, not a
+    questionnaire: no Response column, nothing to fill in. Summary sheet with
+    per-person totals, then a Detail sheet with every entry and its notes.
+
+    Returns b"" when there's nothing to report.
+    """
+    if not noncharge_by_person:
+        return b""
+
+    display_names = display_names or {}
+    rank = rank_fn or (lambda p: p)
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    people = sorted(noncharge_by_person, key=rank)
+    scope = month_label or ", ".join(periods or [])
+
+    # ── Summary ───────────────────────────────────────────────
+    summary_rows, grand = [], [0.0] * 5
+    for person in people:
+        entries  = noncharge_by_person[person]
+        avail    = sum(e["hours"] for e in entries if e["available_time"])
+        pto      = sum(e["hours"] for e in entries if "PTO" in e["task"].upper())
+        holiday  = sum(e["hours"] for e in entries if "HOLIDAY" in e["task"].upper())
+        training = sum(e["hours"] for e in entries if "TRAINING" in e["task"].upper())
+        other    = sum(e["hours"] for e in entries) - avail - pto - holiday - training
+        # Round the components first, then total them — rounding each part and
+        # the total independently lets a row disagree with itself by 0.1.
+        # Hours are logged in quarter-hour increments, so 2dp is exact and
+        # the column totals match the underlying data with no drift.
+        parts = [round(v, 2) for v in (avail, training, pto, holiday, other)]
+        for i, v in enumerate(parts):
+            grand[i] += v
+        summary_rows.append([display_names.get(person, person)] + parts + [round(sum(parts), 2)])
+    summary_rows.append(["TOTAL"] + [round(v, 2) for v in grand]
+                        + [round(sum(grand), 2)])
+
+    ws = _write_sheet(
+        wb, "Summary",
+        ["Person", "Available Time", "Training", "PTO", "Holiday", "Other", "Total"],
+        summary_rows, response_col=False,
+        banner=f"Non-Charge Time — {scope}" if scope else None,
+    )
+    # Bold the TOTAL row
+    total_row = _data_start_row(True if scope else None) + len(summary_rows) - 1
+    for c in range(1, 8):
+        ws.cell(row=total_row, column=c).font = Font(name="Arial", bold=True, size=10.5)
+
+    # ── Detail ────────────────────────────────────────────────
+    detail_rows, avail_flags = [], []
+    for person in people:
+        for e in sorted(noncharge_by_person[person],
+                        key=lambda x: (not x["available_time"], x["date"])):
+            detail_rows.append([
+                display_names.get(person, person), e["date_str"], e["period"],
+                e["task"], e["hours"], e["notes"] or "—", e["description"] or "—",
+            ])
+            avail_flags.append(e["available_time"])
+
+    ws2 = _write_sheet(
+        wb, "Detail",
+        ["Person", "Date", "Period", "Task", "Hrs", "Notes", "Description"],
+        detail_rows, response_col=False,
+    )
+    for r_offset, is_avail in enumerate(avail_flags):
+        if is_avail:
+            ws2.cell(row=r_offset + _data_start_row(), column=4).font = _NEG_FONT
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def build_reports_zip(people_payload: list[dict]) -> bytes:
     """
     people_payload: list of dicts, each containing build_person_workbook's
