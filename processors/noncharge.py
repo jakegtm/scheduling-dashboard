@@ -216,6 +216,26 @@ def parse_noncharge_report(file_obj) -> dict:
     return result
 
 
+def months_from_periods(periods) -> list:
+    """Month names behind a set of half-month period labels.
+    ['September 1-15'] -> ['September']"""
+    seen = []
+    for p in periods or []:
+        month = str(p).split(" ")[0]
+        if month and month not in seen:
+            seen.append(month)
+    return seen
+
+
+def periods_in_months(data: dict, months) -> list:
+    """Every period label in `data` belonging to the given months — so a
+    monthly report picks up both halves even when only one is selected."""
+    wanted = set(months or [])
+    found = {e["period"] for entries in data.values() for e in entries
+             if e["period"].split(" ")[0] in wanted}
+    return sorted(found)
+
+
 def filter_noncharge(data: dict, periods: list = None, people: list = None) -> dict:
     """Narrow parsed data to the selected periods / roster. Returns the same
     shape, dropping people who have nothing left."""
