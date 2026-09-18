@@ -447,34 +447,33 @@ def build_consolidated_noncharge(
     scope = month_label or ", ".join(periods or [])
 
     # ── Summary ───────────────────────────────────────────────
-    summary_rows, grand = [], [0.0] * 5
+    from config import NONCHARGE_COLUMN_ORDER
+    from processors.noncharge import task_group
+
+    cols = list(NONCHARGE_COLUMN_ORDER)
+    summary_rows, grand = [], [0.0] * len(cols)
     for person in people:
-        entries  = noncharge_by_person[person]
-        avail    = sum(e["hours"] for e in entries if e["available_time"])
-        pto      = sum(e["hours"] for e in entries if "PTO" in e["task"].upper())
-        holiday  = sum(e["hours"] for e in entries if "HOLIDAY" in e["task"].upper())
-        training = sum(e["hours"] for e in entries if "TRAINING" in e["task"].upper())
-        other    = sum(e["hours"] for e in entries) - avail - pto - holiday - training
-        # Round the components first, then total them — rounding each part and
-        # the total independently lets a row disagree with itself by 0.1.
-        # Hours are logged in quarter-hour increments, so 2dp is exact and
-        # the column totals match the underlying data with no drift.
-        parts = [round(v, 2) for v in (avail, training, pto, holiday, other)]
+        parts_raw = {c: 0.0 for c in cols}
+        for e in noncharge_by_person[person]:
+            parts_raw[task_group(e["task"])] += e["hours"]
+        # Hours are logged in quarter-hour increments, so 2dp is exact and the
+        # column totals match the underlying data with no drift.
+        parts = [round(parts_raw[c], 2) for c in cols]
         for i, v in enumerate(parts):
             grand[i] += v
-        summary_rows.append([display_names.get(person, person)] + parts + [round(sum(parts), 2)])
+        summary_rows.append([display_names.get(person, person)] + parts
+                            + [round(sum(parts), 2)])
     summary_rows.append(["TOTAL"] + [round(v, 2) for v in grand]
                         + [round(sum(grand), 2)])
 
     ws = _write_sheet(
-        wb, "Summary",
-        ["Person", "Available Time", "Training", "PTO", "Holiday", "Other", "Total"],
+        wb, "Summary", ["Person"] + cols + ["Total"],
         summary_rows, response_col=False,
         banner=f"Non-Charge Time — {scope}" if scope else None,
     )
     # Bold the TOTAL row
     total_row = _data_start_row(True if scope else None) + len(summary_rows) - 1
-    for c in range(1, 8):
+    for c in range(1, len(cols) + 3):
         ws.cell(row=total_row, column=c).font = Font(name="Arial", bold=True, size=10.5)
 
     # ── Detail ────────────────────────────────────────────────
