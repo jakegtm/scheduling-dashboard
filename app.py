@@ -34,8 +34,9 @@ from processors.variance        import (
 from processors.utilization import get_pto_schedule
 from processors.noncharge import (
     parse_noncharge_report, filter_noncharge, noncharge_totals,
-    months_from_periods, periods_in_months,
+    months_from_periods, periods_in_months, unmapped_tasks,
 )
+from config import NONCHARGE_COLUMN_ORDER
 from processors.time_entry import (
     parse_time_coverage, previous_week, find_missing_time, format_week,
 )
@@ -914,13 +915,18 @@ with tab3:
         st.subheader("By Person")
         st.dataframe(
             [{"Person": DISPLAY_NAMES.get(t["person"], t["person"]),
-              "Available Time": t["available_time"],
-              "Training": t["training"], "PTO": t["pto"], "Holiday": t["holiday"],
-              "Other": round(t["other"], 1), "Total": t["total"],
+              **{c: round(t["groups"].get(c, 0.0), 2) for c in NONCHARGE_COLUMN_ORDER},
+              "Total": round(t["total"], 2),
               "Needs Response": t["needs_response"],
               "Has Email": "✅" if t["person_email"] else "❌"}
              for t in sorted(noncharge_summary, key=lambda t: _rank(t["person"]))],
             use_container_width=True, hide_index=True)
+        _unmapped = unmapped_tasks(noncharge_data)
+        if _unmapped:
+            st.caption("Counted under **Other**: "
+                       + ", ".join(f"{t} ({h:g} hrs)" for t, h in _unmapped.items())
+                       + ". Add any of these to `NONCHARGE_TASK_GROUPS` in config.py "
+                         "to give it its own column.")
 
         st.subheader("Detail")
         _only_flagged = st.checkbox(
