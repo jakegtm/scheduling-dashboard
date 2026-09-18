@@ -32,7 +32,33 @@ from config import (
     OPENAIR_EMPLOYEE_MAP,
     VARIANCE_EXCLUDE_PREFIXES,
     NONCHARGE_NO_NOTE_TASKS,
+    NONCHARGE_TASK_GROUPS,
+    NONCHARGE_COLUMN_ORDER,
+    NONCHARGE_OTHER_LABEL,
 )
+
+# Flattened task -> column lookup, built once.
+_TASK_TO_GROUP = {
+    task.upper(): label
+    for label, tasks in NONCHARGE_TASK_GROUPS.items()
+    for task in tasks
+}
+
+
+def task_group(task: str) -> str:
+    """Which summary column a task belongs to. Unknown tasks land in Other."""
+    return _TASK_TO_GROUP.get((task or "").strip().upper(), NONCHARGE_OTHER_LABEL)
+
+
+def unmapped_tasks(data: dict) -> dict:
+    """Tasks falling into Other, with their hours — so a newly added OpenAir
+    task gets noticed instead of quietly inflating the Other column."""
+    out = {}
+    for entries in data.values():
+        for e in entries:
+            if task_group(e["task"]) == NONCHARGE_OTHER_LABEL:
+                out[e["task"]] = out.get(e["task"], 0.0) + e["hours"]
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
 
 AVAILABLE_TIME_TASK = "available time"
 
@@ -259,27 +285,23 @@ def flatten_noncharge(data: dict) -> list:
 
 def noncharge_totals(data: dict) -> list:
     """
-    Per-person rollup for the tab's summary table.
+    Per-person rollup for the summary tables.
 
-    Returns a list of dicts sorted by most non-charge hours first.
+    Each entry carries a "groups" dict keyed by NONCHARGE_COLUMN_ORDER, so
+    adding or regrouping a column in config flows through automatically.
     """
     totals = []
     for person, entries in data.items():
-        available = sum(e["hours"] for e in entries if e["available_time"])
-        pto       = sum(e["hours"] for e in entries if "PTO" in e["task"].upper())
-        holiday   = sum(e["hours"] for e in entries if "HOLIDAY" in e["task"].upper())
-        training  = sum(e["hours"] for e in entries if "TRAINING" in e["task"].upper())
-        total     = sum(e["hours"] for e in entries)
+        groups = {label: 0.0 for label in NONCHARGE_COLUMN_ORDER}
+        for e in entries:
+            groups[task_group(e["task"])] += e["hours"]
         totals.append({
             "person":         person,
             "first_name":     FIRST_NAMES.get(person, person),
             "person_email":   EMAIL_LOOKUP.get(person),
-            "available_time": available,
-            "pto":            pto,
-            "holiday":        holiday,
-            "training":       training,
-            "other":          total - available - pto - holiday - training,
-            "total":          total,
+            "groups":         groups,
+            "available_time": groups.get("Available Time", 0.0),
+            "total":          sum(groups.values()),
             "needs_response": sum(1 for e in entries if e["needs_response"]),
         })
     totals.sort(key=lambda t: t["total"], reverse=True)
