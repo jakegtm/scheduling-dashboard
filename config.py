@@ -51,6 +51,34 @@ NONCHARGE_NO_NOTE_TASKS = {
     "NCH PPL",
 }
 
+# --- NON-CHARGE COLUMN GROUPING ---
+# Which tasks get their own column in the non-charge summaries, and in what
+# order. Derived from a full-year analysis of the time report: Admin/Scheduling
+# and Business Development alone are 63% of all non-charge time, so leaving
+# them in "Other" made the breakout useless.
+#
+# Ordering runs activity first (what people chose to do), then time off.
+# Match is on the exact task name, upper-cased — substring matching quietly
+# misfiles anything new. Tasks not listed here fall into "Other"; the app
+# surfaces those so a new task doesn't disappear silently.
+NONCHARGE_TASK_GROUPS = {
+    "Available Time":    {"AVAILABLE TIME"},
+    "Admin/Scheduling":  {"NONCHARGE HRS ADMIN/SCHEDULING"},
+    "Business Dev":      {"NCH BUSINESS DEVELOPMENT"},
+    "Training":          {"NONCHARGE HRS TRAINING"},
+    "Marketing":         {"NONCHARGE HRS MARKETING"},
+    "Client Assistance": {"TTG - GTM CLIENT ASSISTANCE", "TTG - TECHNICAL RESEARCH"},
+    "PTO":               {"NONCHARGE HRS PTO"},
+    "Holiday":           {"NONCHARGE HRS HOLIDAY", "NONCHARGE HRS FLOATING HOLIDAY"},
+    # Statutory / extended leave, grouped because each is individually rare.
+    # FMLA and Military Leave are on the OpenAir task list but unused so far.
+    "Leave":             {"NCH MATERNITY/PATERNITY/ADOPT", "NCH BEREAVEMENT",
+                          "NCH PPL", "NCH JURY DUTY", "FMLA", "MILITARY LEAVE"},
+}
+NONCHARGE_OTHER_LABEL = "Other"
+# Column order for the summary tables.
+NONCHARGE_COLUMN_ORDER = list(NONCHARGE_TASK_GROUPS) + [NONCHARGE_OTHER_LABEL]
+
 # --- TIME ENTRY CHECK ---
 # Flags people who didn't enter (or under-entered) their time in OpenAir for
 # the previous full Mon-Sun week. The reminder appears on the Current Month
