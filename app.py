@@ -35,6 +35,7 @@ from processors.utilization import get_pto_schedule
 from processors.noncharge import (
     parse_noncharge_report, filter_noncharge, noncharge_totals,
     months_from_periods, periods_in_months, unmapped_tasks,
+    weeks_in_scope, scope_dates, parse_chargeable,
 )
 from config import NONCHARGE_COLUMN_ORDER
 from processors.time_entry import (
@@ -243,6 +244,19 @@ def run_tracker(file_hash, _b):
     issues, tbd, owner_map = process_project_tracker(wb[sheet])
     gc.collect()
     return issues, tbd, sheet, owner_map
+
+@st.cache_data(show_spinner=False)
+def run_chargeable(oa_hash, _oa_bytes):
+    """Chargeable hours per person per date, for the consolidated report's
+    Total Chargeable column."""
+    import io
+    try:
+        data = parse_chargeable(io.BytesIO(_oa_bytes))
+    except Exception:
+        data = {}
+    gc.collect()
+    return data
+
 
 @st.cache_data(show_spinner=False)
 def run_time_coverage(oa_hash, _oa_bytes):
@@ -591,11 +605,13 @@ with st.spinner("🔄 Running analysis — please wait…") if _show_spinner els
         st.warning(f"Tracker error: {e}")
 
     noncharge_all = {}
+    chargeable_all = {}
     time_coverage, time_report_date = {}, None
     try:
         if has_openair:
             noncharge_all = run_noncharge(oa_hash, oa_bytes)
             time_coverage, time_report_date = run_time_coverage(oa_hash, oa_bytes)
+            chargeable_all = run_chargeable(oa_hash, oa_bytes)
     except Exception as e:
         st.warning(f"Non-charge error: {e}")
 
@@ -1147,12 +1163,36 @@ _nc_year  = next((e["date"].year for v in _nc_consolidated.values() for e in v),
 _nc_label = (" / ".join(_nc_months) + (f" {_nc_year}" if _nc_year else "")).strip() \
             or "All periods"
 
+# Mon-Sun weeks trimmed to the selected periods, so the weekly blocks add
+# back to the month. Weeks with no time at all are dropped.
+_nc_scope_days, _nc_weeks, _nc_month_blocks = set(), [], []
+if _nc_consolidated and _nc_year:
+    _nc_scope_days = scope_dates(_nc_month_periods, _nc_year)
+    _charge_days = {d for m in chargeable_all.values() for d in m}
+    _nc_weeks = [
+        w for w in weeks_in_scope(_nc_month_periods, _nc_year)
+        if any(e["date"] in set(w["days"]) for v in _nc_consolidated.values() for e in v)
+        or any(d in set(w["days"]) for d in _charge_days)
+    ]
+    # With more than one month selected, add a labelled block per month
+    # underneath the combined total so it's clear what came from when.
+    if len(_nc_months) > 1:
+        for _m in _nc_months:
+            _mp   = periods_in_months(noncharge_all, [_m])
+            _days = scope_dates(_mp, _nc_year)
+            _sub  = {p: [e for e in v if e["date"] in _days]
+                     for p, v in _nc_consolidated.items()}
+            _sub  = {p: v for p, v in _sub.items() if v}
+            _nc_month_blocks.append((f"{_m} {_nc_year}", _sub, _days))
+
 _nc_bytes = b""
 if _nc_consolidated:
     try:
         _nc_bytes = build_consolidated_noncharge(
             _nc_consolidated, month_label=_nc_label, periods=_nc_month_periods,
-            display_names=DISPLAY_NAMES, rank_fn=_rank)
+            display_names=DISPLAY_NAMES, rank_fn=_rank,
+            chargeable=chargeable_all, weeks=_nc_weeks,
+            month_blocks=_nc_month_blocks, scope_days=_nc_scope_days)
     except Exception as e:
         st.warning(f"Consolidated non-charge report error: {e}")
 
