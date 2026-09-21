@@ -25,7 +25,7 @@ from __future__ import annotations
 # the variance tab drops.
 # ============================================================
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from config import (
     EMAIL_LOOKUP,
     FIRST_NAMES,
@@ -260,6 +260,132 @@ def periods_in_months(data: dict, months) -> list:
     found = {e["period"] for entries in data.values() for e in entries
              if e["period"].split(" ")[0] in wanted}
     return sorted(found)
+
+
+_MONTH_NUM = {m: i for i, m in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"], start=1)}
+
+
+def period_bounds(period_label: str, year: int):
+    """'September 1-15' -> (date(2026,9,1), date(2026,9,15)). None if unparseable."""
+    try:
+        month_name, day_range = period_label.split(" ", 1)
+        month = _MONTH_NUM[month_name]
+        first, last = day_range.split("-")
+        return date(year, month, int(first)), date(year, month, int(last))
+    except (ValueError, KeyError):
+        return None
+
+
+def scope_dates(periods, year: int) -> set:
+    """Every calendar date covered by the selected periods. Used to clip weeks
+    so they never reach outside what the report claims to cover."""
+    days = set()
+    for p in periods or []:
+        bounds = period_bounds(p, year)
+        if not bounds:
+            continue
+        start, end = bounds
+        d = start
+        while d <= end:
+            days.add(d)
+            d += timedelta(days=1)
+    return days
+
+
+def weeks_in_scope(periods, year: int) -> list:
+    """
+    Split the selected periods into Mon-Sun weeks, clipped to the scope.
+
+    A week keeps only the days that fall inside the selected periods, so the
+    weekly blocks always sum back to the period total. Partial weeks are
+    labelled with their real date span and day count, e.g.
+    '09/01 - 09/06 (6 days)'.
+
+    Returns [{"start", "end", "days", "n_days", "label", "partial"}, ...].
+    """
+    days = scope_dates(periods, year)
+    if not days:
+        return []
+
+    by_week = {}
+    for d in sorted(days):
+        monday = d - timedelta(days=d.weekday())
+        by_week.setdefault(monday, []).append(d)
+
+    weeks = []
+    for monday in sorted(by_week):
+        in_scope = sorted(by_week[monday])
+        start, end = in_scope[0], in_scope[-1]
+        n = len(in_scope)
+        weeks.append({
+            "start":   start,
+            "end":     end,
+            "days":    in_scope,
+            "n_days":  n,
+            "partial": n < 7,
+            "label":   f"{start.strftime('%m/%d')} - {end.strftime('%m/%d')} "
+                       f"({n} day{'s' if n != 1 else ''})",
+        })
+    return weeks
+
+
+def parse_chargeable(file_obj) -> dict:
+    """
+    Chargeable hours per person per date: {"Browne": {date(2026,9,1): 6.5}}.
+
+    Same report, opposite filter — everything NOT under a non-charge project.
+    Feeds the "Total Chargeable" column so Total ALL reconciles to every hour
+    the person logged.
+    """
+    import csv, io as _io
+
+    if hasattr(file_obj, "read"):
+        content = file_obj.read()
+        if isinstance(content, bytes):
+            content = content.decode("utf-8-sig", errors="replace")
+        file_obj = _io.StringIO(content)
+
+    reader = list(csv.reader(file_obj))
+    out: dict = {}
+
+    header_idx = None
+    c_proj = c_date = c_emp = c_hrs = None
+    for i, row in enumerate(reader):
+        low = [str(c).strip().lower() for c in row]
+        if "date" in low and "employee" in low:
+            header_idx = i
+            for j, h in enumerate(low):
+                if "project" in h:    c_proj = j
+                elif h == "date":     c_date = j
+                elif "employee" in h: c_emp  = j
+                elif "hour" in h:     c_hrs  = j
+            break
+    if header_idx is None or None in (c_proj, c_date, c_emp, c_hrs):
+        return out
+
+    for row in reader[header_idx + 1:]:
+        if len(row) <= max(c_proj, c_date, c_emp, c_hrs):
+            continue
+        emp  = str(row[c_emp]).strip()
+        proj = str(row[c_proj]).strip()
+        if not emp or not proj or _is_noncharge(proj):
+            continue
+        d = _parse_date(str(row[c_date]).strip())
+        if d is None:
+            continue
+        try:
+            hours = float(str(row[c_hrs]).strip().replace(",", ""))
+        except ValueError:
+            continue
+        if hours <= 0:
+            continue
+        person = OPENAIR_EMPLOYEE_MAP.get(
+            emp, emp.split(",")[0].strip() if "," in emp else emp)
+        out.setdefault(person, {})
+        out[person][d] = out[person].get(d, 0.0) + hours
+    return out
 
 
 def filter_noncharge(data: dict, periods: list = None, people: list = None) -> dict:
