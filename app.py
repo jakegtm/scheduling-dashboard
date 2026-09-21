@@ -35,8 +35,13 @@ from processors.utilization import get_pto_schedule
 from processors.noncharge import (
     parse_noncharge_report, filter_noncharge, noncharge_totals,
     months_from_periods, periods_in_months, unmapped_tasks,
-    weeks_in_scope, scope_dates, parse_chargeable,
+    weeks_in_scope, scope_dates, parse_chargeable, period_bounds,
 )
+from datetime import date as _date_cls
+
+_MONTH_ORDER = {m: i for i, m in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"], start=1)}
 from config import NONCHARGE_COLUMN_ORDER
 from processors.time_entry import (
     parse_time_coverage, previous_week, find_missing_time, format_week,
@@ -1174,16 +1179,24 @@ if _nc_consolidated and _nc_year:
         if any(e["date"] in set(w["days"]) for v in _nc_consolidated.values() for e in v)
         or any(d in set(w["days"]) for d in _charge_days)
     ]
-    # With more than one month selected, add a labelled block per month
-    # underneath the combined total so it's clear what came from when.
+    # Blocks beneath the combined total, broad to narrow: one per month when
+    # more than one month is in scope, then one per half-month period.
+    def _block_for(period_list, label):
+        _days = scope_dates(period_list, _nc_year)
+        _sub  = {p: [e for e in v if e["date"] in _days]
+                 for p, v in _nc_consolidated.items()}
+        return (label, {p: v for p, v in _sub.items() if v}, _days)
+
     if len(_nc_months) > 1:
-        for _m in _nc_months:
-            _mp   = periods_in_months(noncharge_all, [_m])
-            _days = scope_dates(_mp, _nc_year)
-            _sub  = {p: [e for e in v if e["date"] in _days]
-                     for p, v in _nc_consolidated.items()}
-            _sub  = {p: v for p, v in _sub.items() if v}
-            _nc_month_blocks.append((f"{_m} {_nc_year}", _sub, _days))
+        for _m in sorted(_nc_months, key=lambda x: _MONTH_ORDER.get(x, 99)):
+            _nc_month_blocks.append(
+                _block_for(periods_in_months(noncharge_all, [_m]), f"{_m} {_nc_year}"))
+
+    if len(_nc_month_periods) > 1:
+        _chron = sorted(_nc_month_periods,
+                        key=lambda p: (period_bounds(p, _nc_year) or (_date_cls.max,))[0])
+        for _p in _chron:
+            _nc_month_blocks.append(_block_for([_p], f"{_p}, {_nc_year}"))
 
 _nc_bytes = b""
 if _nc_consolidated:
