@@ -605,7 +605,10 @@ def build_consolidated_noncharge(
         _write_summary_block(label, subset, days)
 
     _autofit(ws, skip_rows={1, 2} | _TITLE_ROWS.get(ws.title, set()))
-    ws.freeze_panes = "B4"
+    # Freeze rows only. Freezing column A too puts a pane boundary right after
+    # it, and Excel clips text at that boundary — which chopped every block
+    # title down to the width of column A.
+    ws.freeze_panes = "A4"
 
     # ══ By Week ═══════════════════════════════════════════════
     if weeks:
