@@ -79,6 +79,14 @@ NONCHARGE_OTHER_LABEL = "Other"
 # Column order for the summary tables.
 NONCHARGE_COLUMN_ORDER = list(NONCHARGE_TASK_GROUPS) + [NONCHARGE_OTHER_LABEL]
 
+# Time off is reported alongside non-charge activity, not inside it: the
+# activity columns sum to "Total Non-Charge", then Chargeable, PTO, Holiday
+# and Leave sit beside it and everything rolls into "Total ALL". So
+# "non-charge" means discretionary time, not "every hour that wasn't billed".
+NONCHARGE_TIMEOFF_COLUMNS = ["PTO", "Holiday", "Leave"]
+NONCHARGE_ACTIVITY_COLUMNS = [c for c in NONCHARGE_COLUMN_ORDER
+                              if c not in NONCHARGE_TIMEOFF_COLUMNS]
+
 # --- TIME ENTRY CHECK ---
 # Flags people who didn't enter (or under-entered) their time in OpenAir for
 # the previous full Mon-Sun week. The reminder appears on the Current Month
