@@ -505,12 +505,16 @@ def _summary_rows(people, entries_for, chargeable_for, display_names):
                 + [round(buckets[c], 2) for c in off])
         for i, v in enumerate(nums):
             grand[i] += v
-        # None placeholders hold the spots for Total Non-Charge and Total ALL,
-        # which are written as live formulas once the block is laid out.
+        # Written as values, not formulas: openpyxl stores no cached result,
+        # and Excel was opening these columns blank.
+        tnc = round(sum(nums[:len(act)]), 2)
+        all_hrs = round(tnc + sum(nums[len(act):]), 2)
         rows.append([display_names.get(person, person)]
-                    + nums[:len(act)] + [None] + nums[len(act):] + [None])
+                    + nums[:len(act)] + [tnc] + nums[len(act):] + [all_hrs])
     g = [round(v, 2) for v in grand]
-    rows.append(["TOTAL"] + g[:len(act)] + [None] + g[len(act):] + [None])
+    g_tnc = round(sum(g[:len(act)]), 2)
+    g_all = round(g_tnc + sum(g[len(act):]), 2)
+    rows.append(["TOTAL"] + g[:len(act)] + [g_tnc] + g[len(act):] + [g_all])
     return rows, act, off
 
 
@@ -591,27 +595,6 @@ def build_consolidated_noncharge(
         next_row = _block(ws, start, title, headers, rows,
                           widths, total_row_idx=len(rows) - 1)
 
-        # Insert the two total columns as live formulas.
-        hr = start + 1
-        c_act_1, c_act_n = 2, 1 + len(act)
-        c_tnc  = c_act_n + 1
-        c_last = c_tnc + len(off) + 2           # Total ALL
-        for i in range(len(rows)):
-            r = hr + 1 + i
-            bold = (i == len(rows) - 1)
-            f1 = ws.cell(row=r, column=c_tnc)
-            f1.value = (f"=SUM({get_column_letter(c_act_1)}{r}:"
-                        f"{get_column_letter(c_act_n)}{r})")
-            f2 = ws.cell(row=r, column=c_last)
-            f2.value = (f"=SUM({get_column_letter(c_tnc)}{r}:"
-                        f"{get_column_letter(c_last - 1)}{r})")
-            for f in (f1, f2):
-                f.border, f.alignment = _BORDER, _CENTER_MID
-                f.number_format = "General"
-                if bold:
-                    f.font = Font(name="Arial", bold=True, size=10.5)
-                elif i % 2 == 1:
-                    f.fill = _ZEBRA_FILL
         return start
 
     _write_summary_block(f"Total \u2014 {scope}", noncharge_by_person, scope_days)
@@ -653,25 +636,6 @@ def build_consolidated_noncharge(
             start = row2
             row2 = _block(ws2, start, f"Week of {w['label']}", headers, rows,
                           w2, total_row_idx=len(rows) - 1)
-            hr = start + 1
-            c_act_n = 1 + len(act); c_tnc = c_act_n + 1
-            c_last  = c_tnc + len(off) + 2
-            for i in range(len(rows)):
-                r = hr + 1 + i
-                bold = (i == len(rows) - 1)
-                f1 = ws2.cell(row=r, column=c_tnc)
-                f1.value = f"=SUM(B{r}:{get_column_letter(c_act_n)}{r})"
-                f2 = ws2.cell(row=r, column=c_last)
-                f2.value = (f"=SUM({get_column_letter(c_tnc)}{r}:"
-                            f"{get_column_letter(c_last - 1)}{r})")
-                for f in (f1, f2):
-                    f.border, f.alignment = _BORDER, _CENTER_MID
-                    f.number_format = "General"
-                    if bold:
-                        f.font = Font(name="Arial", bold=True, size=10.5)
-                    elif i % 2 == 1:
-                        f.fill = _ZEBRA_FILL
-
         _autofit(ws2, skip_rows={1, 2} | _TITLE_ROWS.get(ws2.title, set()))
         ws2.freeze_panes = "A4"
 
@@ -690,10 +654,6 @@ def build_consolidated_noncharge(
         wb, "Detail",
         ["Person", "Date", "Period", "Task", "Hrs", "Notes", "Description"],
         detail_rows, response_col=False)
-
-    # openpyxl stores no cached result for a formula, so without this Excel
-    # opens the file with every Total column blank.
-    wb.calculation.fullCalcOnLoad = True
 
     buf = io.BytesIO()
     wb.save(buf)
