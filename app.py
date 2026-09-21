@@ -917,6 +917,14 @@ with tab3:
     st.header("Non-Charge Time")
     if not has_openair:
         st.info("ℹ️ Upload the time report to see non-charge time.")
+    elif not noncharge_all and time_coverage:
+        # The report parsed fine but yielded no non-charge rows, which almost
+        # always means the older 4-column export was uploaded.
+        st.error(
+            "This export has no **Task** column, so non-charge time can't be "
+            "broken out. Re-run the OpenAir report with Task, Notes and "
+            "Description included (the *TAS Team Time - LH - Task & Notes* "
+            "version). Variance and the other tabs still work.")
     elif not selected_months:
         st.warning("Select at least one period above.")
     elif not noncharge_data:
