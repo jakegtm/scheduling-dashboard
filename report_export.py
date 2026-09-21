@@ -418,8 +418,7 @@ def build_person_workbook(
     return buf.getvalue()
 
 
-def _block(ws, r0, title, headers, rows, widths, total_row_idx=None,
-           formula_cols=None, red_cells=None):
+def _block(ws, r0, title, headers, rows, widths, total_row_idx=None):
     """Write one titled table starting at row r0. Returns the next free row.
 
     Unlike _write_sheet this stacks several tables on one sheet, so the
@@ -449,10 +448,9 @@ def _block(ws, r0, title, headers, rows, widths, total_row_idx=None,
                 cell.font = Font(name="Arial", bold=True, size=10.5)
             elif i % 2 == 1:
                 cell.fill = _ZEBRA_FILL
-            if not is_total and red_cells and (i, c) in red_cells:
-                cell.font = _NEG_FONT
             if isinstance(v, (int, float)):
-                cell.number_format = "#,##0.##"
+                # "#,##0.##" renders 20 as "20." because the dot is literal.
+                cell.number_format = "General"
             widths[c] = max(widths.get(c, 0), len(str(v)) + 2)
     return hr + 1 + len(rows) + 2  # blank row between blocks
 
@@ -574,7 +572,7 @@ def build_consolidated_noncharge(
                         f"{get_column_letter(c_last - 1)}{r})")
             for f in (f1, f2):
                 f.border, f.alignment = _BORDER, _CENTER_MID
-                f.number_format = "#,##0.##"
+                f.number_format = "General"
                 if bold:
                     f.font = Font(name="Arial", bold=True, size=10.5)
                 elif i % 2 == 1:
@@ -583,10 +581,10 @@ def build_consolidated_noncharge(
 
     _write_summary_block(f"Total \u2014 {scope}", noncharge_by_person, scope_days)
 
-    # Per-month blocks, only when more than one month is in scope.
-    if month_blocks and len(month_blocks) > 1:
-        for label, subset, days in month_blocks:
-            _write_summary_block(label, subset, days)
+    # Sub-blocks under the combined total, ordered broad to narrow:
+    # per-month first (when more than one month is selected), then per-period.
+    for label, subset, days in (month_blocks or []):
+        _write_summary_block(label, subset, days)
 
     for c, w in widths.items():
         ws.column_dimensions[get_column_letter(c)].width = min(max(w, _MIN_WIDTH), 24)
@@ -607,32 +605,6 @@ def build_consolidated_noncharge(
         ws2.row_dimensions[1].height = 24
 
         w2, row2 = {}, 4
-
-        # -- matrix: person x week, Total Non-Charge --
-        from config import NONCHARGE_TIMEOFF_COLUMNS
-        from processors.noncharge import task_group
-        off_set = set(NONCHARGE_TIMEOFF_COLUMNS)
-
-        matrix_rows = []
-        for person in people:
-            cells, tot = [], 0.0
-            for w in weeks:
-                dayset = set(w["days"])
-                h = sum(e["hours"] for e in noncharge_by_person.get(person, [])
-                        if e["date"] in dayset and task_group(e["task"]) not in off_set)
-                cells.append(round(h, 2))
-                tot += h
-            matrix_rows.append([display_names.get(person, person)] + cells + [round(tot, 2)])
-        col_tot = ["TOTAL"]
-        for i in range(len(weeks)):
-            col_tot.append(round(sum(r[i + 1] for r in matrix_rows), 2))
-        col_tot.append(round(sum(r[-1] for r in matrix_rows), 2))
-        matrix_rows.append(col_tot)
-
-        row2 = _block(
-            ws2, row2, "Total Non-Charge by week (excludes PTO / Holiday / Leave)",
-            ["Person"] + [w["label"] for w in weeks] + ["Total"],
-            matrix_rows, w2, total_row_idx=len(matrix_rows) - 1)
 
         # -- one full block per week --
         for w in weeks:
@@ -660,7 +632,7 @@ def build_consolidated_noncharge(
                             f"{get_column_letter(c_last - 1)}{r})")
                 for f in (f1, f2):
                     f.border, f.alignment = _BORDER, _CENTER_MID
-                    f.number_format = "#,##0.##"
+                    f.number_format = "General"
                     if bold:
                         f.font = Font(name="Arial", bold=True, size=10.5)
                     elif i % 2 == 1:
@@ -668,10 +640,10 @@ def build_consolidated_noncharge(
 
         for c, w_ in w2.items():
             ws2.column_dimensions[get_column_letter(c)].width = min(max(w_, _MIN_WIDTH), 24)
-        ws2.freeze_panes = "B6"
+        ws2.freeze_panes = "A4"
 
     # ══ Detail ════════════════════════════════════════════════
-    detail_rows, avail_flags = [], []
+    detail_rows = []
     for person in people:
         for e in sorted(noncharge_by_person[person],
                         key=lambda x: (not x["available_time"], x["date"])):
@@ -680,15 +652,15 @@ def build_consolidated_noncharge(
                 e["task"], e["hours"], e["notes"] or "\u2014",
                 e["description"] or "\u2014",
             ])
-            avail_flags.append(e["available_time"])
 
-    ws3 = _write_sheet(
+    _write_sheet(
         wb, "Detail",
         ["Person", "Date", "Period", "Task", "Hrs", "Notes", "Description"],
         detail_rows, response_col=False)
-    for r_offset, is_avail in enumerate(avail_flags):
-        if is_avail:
-            ws3.cell(row=r_offset + _data_start_row(), column=4).font = _NEG_FONT
+
+    # openpyxl stores no cached result for a formula, so without this Excel
+    # opens the file with every Total column blank.
+    wb.calculation.fullCalcOnLoad = True
 
     buf = io.BytesIO()
     wb.save(buf)
