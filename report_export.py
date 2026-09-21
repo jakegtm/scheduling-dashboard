@@ -418,6 +418,38 @@ def build_person_workbook(
     return buf.getvalue()
 
 
+# Rows holding a block title or banner, per sheet — excluded from autofit.
+_TITLE_ROWS: dict = {}
+
+
+def _autofit(ws, skip_rows=(), min_w=9, max_w=46):
+    """Size every column to its widest cell, once the sheet is fully written.
+
+    Title/banner rows are skipped: they are long strings sitting in column A
+    and would stretch it across the screen. Formula cells are measured by
+    their result's likely width, not the formula text.
+    """
+    skip = set(skip_rows)
+    widths = {}
+    for row in ws.iter_rows():
+        if row and row[0].row in skip:
+            continue
+        for cell in row:
+            v = cell.value
+            if v is None:
+                continue
+            if isinstance(v, str) and v.startswith("="):
+                length = 8              # a summed hours figure, not the formula
+            elif isinstance(v, float):
+                length = len(f"{v:g}")
+            else:
+                length = max((len(line) for line in str(v).split("\n")), default=0)
+            widths[cell.column] = max(widths.get(cell.column, 0), length)
+    for col, w in widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = min(
+            max(w + 2, min_w), max_w)
+
+
 def _block(ws, r0, title, headers, rows, widths, total_row_idx=None):
     """Write one titled table starting at row r0. Returns the next free row.
 
@@ -428,6 +460,7 @@ def _block(ws, r0, title, headers, rows, widths, total_row_idx=None):
     ws.cell(row=r0, column=1, value=title).font = Font(
         name="Arial", bold=True, size=12, color=_BRAND)
     ws.row_dimensions[r0].height = 20
+    _TITLE_ROWS.setdefault(ws.title, set()).add(r0)
 
     hr = r0 + 1
     for c, h in enumerate(headers, start=1):
@@ -529,6 +562,8 @@ def build_consolidated_noncharge(
         else:
             scope_days = {e["date"] for v in noncharge_by_person.values() for e in v}
 
+    _TITLE_ROWS.clear()
+
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -586,8 +621,7 @@ def build_consolidated_noncharge(
     for label, subset, days in (month_blocks or []):
         _write_summary_block(label, subset, days)
 
-    for c, w in widths.items():
-        ws.column_dimensions[get_column_letter(c)].width = min(max(w, _MIN_WIDTH), 24)
+    _autofit(ws, skip_rows={1, 2} | _TITLE_ROWS.get(ws.title, set()))
     ws.freeze_panes = "B4"
 
     # ══ By Week ═══════════════════════════════════════════════
@@ -638,8 +672,7 @@ def build_consolidated_noncharge(
                     elif i % 2 == 1:
                         f.fill = _ZEBRA_FILL
 
-        for c, w_ in w2.items():
-            ws2.column_dimensions[get_column_letter(c)].width = min(max(w_, _MIN_WIDTH), 24)
+        _autofit(ws2, skip_rows={1, 2} | _TITLE_ROWS.get(ws2.title, set()))
         ws2.freeze_panes = "A4"
 
     # ══ Detail ════════════════════════════════════════════════
