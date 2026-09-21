@@ -418,83 +418,277 @@ def build_person_workbook(
     return buf.getvalue()
 
 
+def _block(ws, r0, title, headers, rows, widths, total_row_idx=None,
+           formula_cols=None, red_cells=None):
+    """Write one titled table starting at row r0. Returns the next free row.
+
+    Unlike _write_sheet this stacks several tables on one sheet, so the
+    Summary can carry a combined total plus per-month blocks, and By Week can
+    carry a block per week.
+    """
+    ws.cell(row=r0, column=1, value=title).font = Font(
+        name="Arial", bold=True, size=12, color=_BRAND)
+    ws.row_dimensions[r0].height = 20
+
+    hr = r0 + 1
+    for c, h in enumerate(headers, start=1):
+        cell = ws.cell(row=hr, column=c, value=h)
+        cell.fill, cell.font, cell.border = _HEADER_FILL, _HEADER_FONT, _BORDER
+        cell.alignment = _LEFT_MID
+        widths[c] = max(widths.get(c, 0), len(str(h)) + 2)
+    ws.row_dimensions[hr].height = 20
+
+    for i, row in enumerate(rows):
+        r = hr + 1 + i
+        is_total = (total_row_idx is not None and i == total_row_idx)
+        for c, v in enumerate(row, start=1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.border = _BORDER
+            cell.alignment = _CENTER_MID if c > 1 else _LEFT_MID
+            if is_total:
+                cell.font = Font(name="Arial", bold=True, size=10.5)
+            elif i % 2 == 1:
+                cell.fill = _ZEBRA_FILL
+            if not is_total and red_cells and (i, c) in red_cells:
+                cell.font = _NEG_FONT
+            if isinstance(v, (int, float)):
+                cell.number_format = "#,##0.##"
+            widths[c] = max(widths.get(c, 0), len(str(v)) + 2)
+    return hr + 1 + len(rows) + 2  # blank row between blocks
+
+
+def _summary_rows(people, entries_for, chargeable_for, display_names):
+    """Build the data rows (plus TOTAL) for one summary block."""
+    from config import NONCHARGE_ACTIVITY_COLUMNS, NONCHARGE_TIMEOFF_COLUMNS
+    from processors.noncharge import task_group
+
+    act, off = NONCHARGE_ACTIVITY_COLUMNS, NONCHARGE_TIMEOFF_COLUMNS
+    n_num = len(act) + 1 + len(off)          # activity + chargeable + time off
+    rows, grand = [], [0.0] * n_num
+    for person in people:
+        buckets = {c: 0.0 for c in act + off}
+        for e in entries_for(person):
+            buckets[task_group(e["task"])] += e["hours"]
+        nums = ([round(buckets[c], 2) for c in act]
+                + [round(chargeable_for(person), 2)]
+                + [round(buckets[c], 2) for c in off])
+        for i, v in enumerate(nums):
+            grand[i] += v
+        # None placeholders hold the spots for Total Non-Charge and Total ALL,
+        # which are written as live formulas once the block is laid out.
+        rows.append([display_names.get(person, person)]
+                    + nums[:len(act)] + [None] + nums[len(act):] + [None])
+    g = [round(v, 2) for v in grand]
+    rows.append(["TOTAL"] + g[:len(act)] + [None] + g[len(act):] + [None])
+    return rows, act, off
+
+
 def build_consolidated_noncharge(
     noncharge_by_person: dict,
     month_label: str = "",
     periods: list = None,
     display_names: dict = None,
     rank_fn=None,
+    chargeable: dict = None,
+    weeks: list = None,
+    month_blocks: list = None,
+    scope_days: set = None,
 ) -> bytes:
     """
-    One workbook covering every person's non-charge time for the month.
+    One workbook covering the whole team's non-charge time.
 
-    Unlike the per-person workbooks this is a review document, not a
-    questionnaire: no Response column, nothing to fill in. Summary sheet with
-    per-person totals, then a Detail sheet with every entry and its notes.
+    Summary   combined total, plus a block per month when more than one is
+              selected. Activity columns sum to Total Non-Charge; Chargeable,
+              PTO, Holiday and Leave sit beside it and roll into Total ALL.
+    By Week   a matrix of Total Non-Charge per person per week, then a full
+              block per week. Weeks are Mon-Sun clipped to the selected
+              periods and labelled with their date span and day count.
+    Detail    every entry with its notes and description.
 
-    Returns b"" when there's nothing to report.
+    A review document, not a questionnaire: no Response column.
+    Returns b"" when there is nothing to report.
     """
     if not noncharge_by_person:
         return b""
 
     display_names = display_names or {}
-    rank = rank_fn or (lambda p: p)
+    rank    = rank_fn or (lambda p: p)
+    charge  = chargeable or {}
+    people  = sorted(noncharge_by_person, key=rank)
+    scope   = month_label or ", ".join(periods or [])
+
+    def _charge_in(person, days=None):
+        per_day = charge.get(person, {})
+        if days is None:
+            return sum(per_day.values())
+        return sum(h for d, h in per_day.items() if d in days)
+
+    # Chargeable must be clipped to the reported scope, or the column shows
+    # the person's whole-year total next to one month of non-charge time.
+    if not scope_days:
+        if weeks:
+            scope_days = {d for w in weeks for d in w["days"]}
+        else:
+            scope_days = {e["date"] for v in noncharge_by_person.values() for e in v}
 
     wb = Workbook()
     wb.remove(wb.active)
 
-    people = sorted(noncharge_by_person, key=rank)
-    scope = month_label or ", ".join(periods or [])
+    # ══ Summary ═══════════════════════════════════════════════
+    ws = wb.create_sheet("Summary")
+    ws.sheet_properties.tabColor = _BRAND
+    ws.cell(row=1, column=1, value=f"Non-Charge Time \u2014 {scope}").font = Font(
+        name="Arial", bold=True, size=14, color=_BRAND)
+    ws.row_dimensions[1].height = 24
 
-    # ── Summary ───────────────────────────────────────────────
-    from config import NONCHARGE_COLUMN_ORDER
-    from processors.noncharge import task_group
+    widths = {}
+    next_row = 3
 
-    cols = list(NONCHARGE_COLUMN_ORDER)
-    summary_rows, grand = [], [0.0] * len(cols)
-    for person in people:
-        parts_raw = {c: 0.0 for c in cols}
-        for e in noncharge_by_person[person]:
-            parts_raw[task_group(e["task"])] += e["hours"]
-        # Hours are logged in quarter-hour increments, so 2dp is exact and the
-        # column totals match the underlying data with no drift.
-        parts = [round(parts_raw[c], 2) for c in cols]
-        for i, v in enumerate(parts):
-            grand[i] += v
-        summary_rows.append([display_names.get(person, person)] + parts
-                            + [round(sum(parts), 2)])
-    summary_rows.append(["TOTAL"] + [round(v, 2) for v in grand]
-                        + [round(sum(grand), 2)])
+    def _write_summary_block(title, subset, days=None):
+        nonlocal next_row
+        rows, act, off = _summary_rows(
+            people,
+            lambda p: [e for e in subset.get(p, [])],
+            lambda p: _charge_in(p, days),
+            display_names,
+        )
+        headers = (["Person"] + act + ["Total Non-Charge", "Total Chargeable"]
+                   + off + ["Total ALL"])
+        start = next_row
+        next_row = _block(ws, start, title, headers, rows,
+                          widths, total_row_idx=len(rows) - 1)
 
-    ws = _write_sheet(
-        wb, "Summary", ["Person"] + cols + ["Total"],
-        summary_rows, response_col=False,
-        banner=f"Non-Charge Time — {scope}" if scope else None,
-    )
-    # Bold the TOTAL row
-    total_row = _data_start_row(True if scope else None) + len(summary_rows) - 1
-    for c in range(1, len(cols) + 3):
-        ws.cell(row=total_row, column=c).font = Font(name="Arial", bold=True, size=10.5)
+        # Insert the two total columns as live formulas.
+        hr = start + 1
+        c_act_1, c_act_n = 2, 1 + len(act)
+        c_tnc  = c_act_n + 1
+        c_last = c_tnc + len(off) + 2           # Total ALL
+        for i in range(len(rows)):
+            r = hr + 1 + i
+            bold = (i == len(rows) - 1)
+            f1 = ws.cell(row=r, column=c_tnc)
+            f1.value = (f"=SUM({get_column_letter(c_act_1)}{r}:"
+                        f"{get_column_letter(c_act_n)}{r})")
+            f2 = ws.cell(row=r, column=c_last)
+            f2.value = (f"=SUM({get_column_letter(c_tnc)}{r}:"
+                        f"{get_column_letter(c_last - 1)}{r})")
+            for f in (f1, f2):
+                f.border, f.alignment = _BORDER, _CENTER_MID
+                f.number_format = "#,##0.##"
+                if bold:
+                    f.font = Font(name="Arial", bold=True, size=10.5)
+                elif i % 2 == 1:
+                    f.fill = _ZEBRA_FILL
+        return start
 
-    # ── Detail ────────────────────────────────────────────────
+    _write_summary_block(f"Total \u2014 {scope}", noncharge_by_person, scope_days)
+
+    # Per-month blocks, only when more than one month is in scope.
+    if month_blocks and len(month_blocks) > 1:
+        for label, subset, days in month_blocks:
+            _write_summary_block(label, subset, days)
+
+    for c, w in widths.items():
+        ws.column_dimensions[get_column_letter(c)].width = min(max(w, _MIN_WIDTH), 24)
+    ws.freeze_panes = "B4"
+
+    # ══ By Week ═══════════════════════════════════════════════
+    if weeks:
+        ws2 = wb.create_sheet("By Week")
+        ws2.sheet_properties.tabColor = _BRAND
+        ws2.cell(row=1, column=1,
+                 value=f"Non-Charge Time by Week \u2014 {scope}").font = Font(
+            name="Arial", bold=True, size=14, color=_BRAND)
+        ws2.cell(row=2, column=1, value=(
+            "Weeks run Monday-Sunday, trimmed to the selected period(s); the "
+            "day count in each heading shows how many days that week "
+            "contributes, so the weekly figures add back to the Summary."
+        )).font = Font(name="Arial", italic=True, size=9, color="666666")
+        ws2.row_dimensions[1].height = 24
+
+        w2, row2 = {}, 4
+
+        # -- matrix: person x week, Total Non-Charge --
+        from config import NONCHARGE_TIMEOFF_COLUMNS
+        from processors.noncharge import task_group
+        off_set = set(NONCHARGE_TIMEOFF_COLUMNS)
+
+        matrix_rows = []
+        for person in people:
+            cells, tot = [], 0.0
+            for w in weeks:
+                dayset = set(w["days"])
+                h = sum(e["hours"] for e in noncharge_by_person.get(person, [])
+                        if e["date"] in dayset and task_group(e["task"]) not in off_set)
+                cells.append(round(h, 2))
+                tot += h
+            matrix_rows.append([display_names.get(person, person)] + cells + [round(tot, 2)])
+        col_tot = ["TOTAL"]
+        for i in range(len(weeks)):
+            col_tot.append(round(sum(r[i + 1] for r in matrix_rows), 2))
+        col_tot.append(round(sum(r[-1] for r in matrix_rows), 2))
+        matrix_rows.append(col_tot)
+
+        row2 = _block(
+            ws2, row2, "Total Non-Charge by week (excludes PTO / Holiday / Leave)",
+            ["Person"] + [w["label"] for w in weeks] + ["Total"],
+            matrix_rows, w2, total_row_idx=len(matrix_rows) - 1)
+
+        # -- one full block per week --
+        for w in weeks:
+            dayset = set(w["days"])
+            subset = {p: [e for e in noncharge_by_person.get(p, [])
+                          if e["date"] in dayset] for p in people}
+            rows, act, off = _summary_rows(
+                people, lambda p: subset.get(p, []),
+                lambda p: _charge_in(p, dayset), display_names)
+            headers = (["Person"] + act + ["Total Non-Charge", "Total Chargeable"]
+                       + off + ["Total ALL"])
+            start = row2
+            row2 = _block(ws2, start, f"Week of {w['label']}", headers, rows,
+                          w2, total_row_idx=len(rows) - 1)
+            hr = start + 1
+            c_act_n = 1 + len(act); c_tnc = c_act_n + 1
+            c_last  = c_tnc + len(off) + 2
+            for i in range(len(rows)):
+                r = hr + 1 + i
+                bold = (i == len(rows) - 1)
+                f1 = ws2.cell(row=r, column=c_tnc)
+                f1.value = f"=SUM(B{r}:{get_column_letter(c_act_n)}{r})"
+                f2 = ws2.cell(row=r, column=c_last)
+                f2.value = (f"=SUM({get_column_letter(c_tnc)}{r}:"
+                            f"{get_column_letter(c_last - 1)}{r})")
+                for f in (f1, f2):
+                    f.border, f.alignment = _BORDER, _CENTER_MID
+                    f.number_format = "#,##0.##"
+                    if bold:
+                        f.font = Font(name="Arial", bold=True, size=10.5)
+                    elif i % 2 == 1:
+                        f.fill = _ZEBRA_FILL
+
+        for c, w_ in w2.items():
+            ws2.column_dimensions[get_column_letter(c)].width = min(max(w_, _MIN_WIDTH), 24)
+        ws2.freeze_panes = "B6"
+
+    # ══ Detail ════════════════════════════════════════════════
     detail_rows, avail_flags = [], []
     for person in people:
         for e in sorted(noncharge_by_person[person],
                         key=lambda x: (not x["available_time"], x["date"])):
             detail_rows.append([
                 display_names.get(person, person), e["date_str"], e["period"],
-                e["task"], e["hours"], e["notes"] or "—", e["description"] or "—",
+                e["task"], e["hours"], e["notes"] or "\u2014",
+                e["description"] or "\u2014",
             ])
             avail_flags.append(e["available_time"])
 
-    ws2 = _write_sheet(
+    ws3 = _write_sheet(
         wb, "Detail",
         ["Person", "Date", "Period", "Task", "Hrs", "Notes", "Description"],
-        detail_rows, response_col=False,
-    )
+        detail_rows, response_col=False)
     for r_offset, is_avail in enumerate(avail_flags):
         if is_avail:
-            ws2.cell(row=r_offset + _data_start_row(), column=4).font = _NEG_FONT
+            ws3.cell(row=r_offset + _data_start_row(), column=4).font = _NEG_FONT
 
     buf = io.BytesIO()
     wb.save(buf)
