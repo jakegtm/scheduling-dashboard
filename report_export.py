@@ -450,7 +450,8 @@ def _autofit(ws, skip_rows=(), min_w=9, max_w=46):
             max(w + 2, min_w), max_w)
 
 
-def _block(ws, r0, title, headers, rows, widths, total_row_idx=None):
+def _block(ws, r0, title, headers, rows, widths, total_row_idx=None,
+           percent_cols=()):
     """Write one titled table starting at row r0. Returns the next free row.
 
     Unlike _write_sheet this stacks several tables on one sheet, so the
@@ -483,7 +484,7 @@ def _block(ws, r0, title, headers, rows, widths, total_row_idx=None):
                 cell.fill = _ZEBRA_FILL
             if isinstance(v, (int, float)):
                 # "#,##0.##" renders 20 as "20." because the dot is literal.
-                cell.number_format = "General"
+                cell.number_format = "0.0%" if c in percent_cols else "General"
             widths[c] = max(widths.get(c, 0), len(str(v)) + 2)
     return hr + 1 + len(rows) + 2  # blank row between blocks
 
@@ -509,12 +510,16 @@ def _summary_rows(people, entries_for, chargeable_for, display_names):
         # and Excel was opening these columns blank.
         tnc = round(sum(nums[:len(act)]), 2)
         all_hrs = round(tnc + sum(nums[len(act):]), 2)
+        util = (nums[len(act)] / all_hrs) if all_hrs else None   # chargeable / total
         rows.append([display_names.get(person, person)]
-                    + nums[:len(act)] + [tnc] + nums[len(act):] + [all_hrs])
+                    + nums[:len(act)] + [tnc] + nums[len(act):] + [all_hrs]
+                    + [None, util])
     g = [round(v, 2) for v in grand]
     g_tnc = round(sum(g[:len(act)]), 2)
     g_all = round(g_tnc + sum(g[len(act):]), 2)
-    rows.append(["TOTAL"] + g[:len(act)] + [g_tnc] + g[len(act):] + [g_all])
+    g_util = (g[len(act)] / g_all) if g_all else None
+    rows.append(["TOTAL"] + g[:len(act)] + [g_tnc] + g[len(act):] + [g_all]
+                + [None, g_util])
     return rows, act, off
 
 
@@ -590,10 +595,11 @@ def build_consolidated_noncharge(
             display_names,
         )
         headers = (["Person"] + act + ["Total Non-Charge", "Total Chargeable"]
-                   + off + ["Total ALL"])
+                   + off + ["Total ALL", "", "Utilization"])
         start = next_row
-        next_row = _block(ws, start, title, headers, rows,
-                          widths, total_row_idx=len(rows) - 1)
+        next_row = _block(ws, start, title, headers, rows, widths,
+                          total_row_idx=len(rows) - 1,
+                          percent_cols={len(headers)})
 
         return start
 
@@ -635,10 +641,11 @@ def build_consolidated_noncharge(
                 people, lambda p: subset.get(p, []),
                 lambda p: _charge_in(p, dayset), display_names)
             headers = (["Person"] + act + ["Total Non-Charge", "Total Chargeable"]
-                       + off + ["Total ALL"])
+                       + off + ["Total ALL", "", "Utilization"])
             start = row2
             row2 = _block(ws2, start, f"Week of {w['label']}", headers, rows,
-                          w2, total_row_idx=len(rows) - 1)
+                          w2, total_row_idx=len(rows) - 1,
+                          percent_cols={len(headers)})
         _autofit(ws2, skip_rows={1, 2} | _TITLE_ROWS.get(ws2.title, set()))
         ws2.freeze_panes = "A4"
 
