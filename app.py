@@ -1200,11 +1200,8 @@ if _nc_consolidated and _nc_year:
             _nc_month_blocks.append(
                 _block_for(periods_in_months(noncharge_all, [_m]), f"{_m} {_nc_year}"))
 
-    if len(_nc_month_periods) > 1:
-        _chron = sorted(_nc_month_periods,
-                        key=lambda p: (period_bounds(p, _nc_year) or (_date_cls.max,))[0])
-        for _p in _chron:
-            _nc_month_blocks.append(_block_for([_p], f"{_p}, {_nc_year}"))
+    # Per-period blocks intentionally omitted: the By Week tab already breaks
+    # the month down, and repeating it here made Summary several screens long.
 
 _nc_bytes = b""
 if _nc_consolidated:
