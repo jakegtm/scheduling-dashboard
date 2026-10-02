@@ -170,6 +170,15 @@ if not st.session_state.authenticated:
 # HELPERS
 # ============================================================
 
+def _money(val) -> str:
+    """$1,234 / ($1,234) — same dollar format as the exported reports."""
+    if val is None:
+        return ""
+    r = round(val)
+    if r == 0:
+        return "$0"
+    return f"(${abs(r):,.0f})" if r < 0 else f"${r:,.0f}"
+
 def _hash(b: bytes) -> str:
     return hashlib.md5(b).hexdigest()
 
@@ -917,7 +926,7 @@ with tab1:
                 st.dataframe(
                     [{"Client": p.get("client",""), "Project Code": p.get("project_code",""),
                       "Status": p.get("status","TBD"), "Owner": p.get("owner",""),
-                      "Budget": f"${p.get('budget',0):,.0f}",
+                      "Budget": _money(p.get('budget',0)),
                       "Notes": p.get("notes", "")}
                      for p in tbd_projects],
                     use_container_width=True, hide_index=True)
@@ -959,8 +968,8 @@ with tab2:
             st.dataframe(
                 [{"Client": i.get("client",""), "Project Code": i.get("project_code",""),
                   "Owner": i.get("owner",""),
-                  "Budget": f"${i.get('budget',0):,.0f}",
-                  "Remaining": f"${i.get('remaining',0):,.0f}",
+                  "Budget": _money(i.get('budget',0)),
+                  "Remaining": _money(i.get('remaining',0)),
                   "Flag": i.get("description",""),
                   "Has Email": "✅" if i.get("owner_email") else "❌"}
                  for i in budget_issues],
@@ -973,8 +982,9 @@ with tab2:
         st.dataframe(
             [{"Client": r.get("client",""), "Project Code": r.get("project_code",""),
               "Owner": r.get("owner",""), "Status": r.get("status",""),
-              "2026 Budget": f"${r.get('budget',0):,.0f}",
-              "Reclass to 2027": f"${r.get('reclass',0):,.0f}",
+              "2026 Budget": _money(r.get('budget',0)),
+              "Reclass to 2027": _money(r.get('reclass',0)),
+              "Total Budget": _money((r.get('budget') or 0) + (r.get('reclass') or 0)),
               "Has Email": "✅" if r.get("owner_email") else "❌"}
              for r in reclass_projects],
             use_container_width=True, hide_index=True)
@@ -986,8 +996,7 @@ with tab2:
         st.dataframe(
             [{"Month": w.get("month",""), "Client": w.get("client",""),
               "Project Code": w.get("project_code",""), "Owner": w.get("owner",""),
-              "Write Up / (Down)": (f"${w['amount']:,.2f}" if w["amount"] >= 0
-                                    else f"(${abs(w['amount']):,.2f})"),
+              "Write Up / (Down)": _money(w["amount"]),
               "Has Email": "✅" if w.get("owner_email") else "❌"}
              for w in write_ups],
             use_container_width=True, hide_index=True)
