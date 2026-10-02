@@ -8,8 +8,13 @@ from __future__ import annotations
 #   C(3):  Status         <- filter to Known / TBD / Pending SOW
 #   E(5):  Notes
 #   I(9):  Project Owner  <- email target (H is Client Owner, ignored)
-#   J(10): Budget
-#   K-R (11-18): Rates (Intern → Managing Director)
+#   J(10): 2026 Budget
+#   K(11): Reclass to 2027
+#   L-S (12-19): Rates (Intern → Managing Director)
+#   T(20): Write Up / (Down)
+#
+# Columns are located by their row-1 header text, so inserting new
+# columns won't break the reader. The numbers above are only fallbacks.
 #
 # Rules:
 #   - TBD or Pending SOW (status only) → collect in TBD list
@@ -26,8 +31,9 @@ COL_STATUS      = 3   # C
 COL_NOTES       = 5   # E
 COL_OWNER       = 9   # I — Project Owner
 COL_BUDGET      = 10  # J
-COL_RATES_START = 11  # K — Intern
-COL_RATES_END   = 18  # R — Managing Director
+COL_RECLASS     = 11  # K — Reclass to 2027
+COL_RATES_START = 12  # L — Intern
+COL_RATES_END   = 19  # S — Managing Director
 
 RATE_LABELS = [
     "Intern", "Analyst", "Senior Analyst", "Supervisor",
@@ -64,6 +70,83 @@ def _lookup_first(name: str) -> str:
     return FIRST_NAMES.get(name.strip(), name.strip())
 
 
+def _norm(h) -> str:
+    return " ".join(str(h).lower().split()) if h is not None else ""
+
+
+def _resolve_columns(ws) -> dict:
+    """Find column positions from the row-1 headers, falling back to the
+    fixed defaults for anything not found."""
+    headers = {}
+    for cell in next(ws.iter_rows(min_row=1, max_row=1)):
+        h = _norm(cell.value)
+        if h and h not in headers:
+            headers[h] = cell.column
+
+    def find(*names, default):
+        for n in names:
+            if n in headers:
+                return headers[n]
+        for n in names:                      # loose "contains" match
+            for h, c in headers.items():
+                if n in h:
+                    return c
+        return default
+
+    cols = {
+        "client":  find("client", default=COL_CLIENT),
+        "code":    find("project code", default=COL_CODE),
+        "status":  find("status", default=COL_STATUS),
+        "notes":   find("notes", default=COL_NOTES),
+        "owner":   find("project owner", default=COL_OWNER),
+        "budget":  find("2026 budget", "budget", default=COL_BUDGET),
+        "reclass": find("reclass to 2027", "reclass", default=COL_RECLASS),
+    }
+    rate_cols = []
+    for i, label in enumerate(RATE_LABELS):
+        c = headers.get(label.lower())
+        rate_cols.append(c if c else COL_RATES_START + i)
+    cols["rates"] = rate_cols
+    return cols
+
+
+def _cell(row, col):
+    return row[col - 1] if col and col - 1 < len(row) else None
+
+
+def get_reclass_projects(ws) -> list:
+    """
+    Projects with a non-zero 'Reclass to 2027' amount, for the project
+    owner's report. Closed projects are skipped.
+    """
+    cols = _resolve_columns(ws)
+    out  = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        row = list(row)
+        client = _cell(row, cols["client"])
+        code   = _cell(row, cols["code"])
+        if not client and not code:
+            continue
+        status = str(_cell(row, cols["status"]) or "").strip()
+        if status.lower() == "closed":
+            continue
+        reclass = _to_float(_cell(row, cols["reclass"]))
+        if not reclass:
+            continue
+        owner = str(_cell(row, cols["owner"]) or "").strip()
+        out.append({
+            "client":       client,
+            "project_code": str(code).strip() if code else "",
+            "status":       status,
+            "owner":        owner,
+            "owner_email":  _lookup_email(owner),
+            "owner_first":  _lookup_first(owner),
+            "budget":       _to_float(_cell(row, cols["budget"])) or 0.0,
+            "reclass":      reclass,
+        })
+    return out
+
+
 def process_project_tracker(ws) -> tuple:
     """
     Returns:
@@ -75,14 +158,16 @@ def process_project_tracker(ws) -> tuple:
     tbd_projects      = []
     project_owner_map = {}
 
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        row = list(row) + [None] * 10
+    cols = _resolve_columns(ws)
 
-        client       = row[COL_CLIENT - 1]
-        project_code = row[COL_CODE - 1]
-        status       = row[COL_STATUS - 1]
-        owner        = row[COL_OWNER - 1]
-        budget       = _to_float(row[COL_BUDGET - 1])
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        row = list(row)
+
+        client       = _cell(row, cols["client"])
+        project_code = _cell(row, cols["code"])
+        status       = _cell(row, cols["status"])
+        owner        = _cell(row, cols["owner"])
+        budget       = _to_float(_cell(row, cols["budget"]))
 
         if not client and not project_code:
             continue
@@ -97,7 +182,7 @@ def process_project_tracker(ws) -> tuple:
 
         # --- TBD / Pending SOW --- filter by status only
         if status_str.lower() in TBD_STATUSES:
-            notes_val = row[COL_NOTES - 1] if len(row) >= COL_NOTES else None
+            notes_val = _cell(row, cols["notes"])
             tbd_projects.append({
                 "client":       client,
                 "project_code": code_str,
@@ -114,8 +199,8 @@ def process_project_tracker(ws) -> tuple:
         if status_str.lower() != "known":
             continue
 
-        # Check for any blank rate in K:R
-        rate_values = row[COL_RATES_START - 1: COL_RATES_END]
+        # Check for any blank rate (Intern → Managing Director)
+        rate_values = [_cell(row, c) for c in cols["rates"]]
         missing_labels = [
             label for label, val in zip(RATE_LABELS, rate_values)
             if val is None or str(val).strip() == ""
