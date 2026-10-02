@@ -25,7 +25,8 @@ from config import (
 from report_export import (build_person_workbook, build_reports_zip,
                            build_consolidated_noncharge)
 from processors.budget_actual   import process_budget_actual
-from processors.project_tracker import process_project_tracker
+from processors.project_tracker import process_project_tracker, get_reclass_projects
+from processors.write_ups       import get_write_ups
 from processors.variance        import (
     parse_openair_report, read_schedule_hours,
     compute_variances, get_available_months, filter_by_months,
@@ -249,6 +250,25 @@ def run_tracker(file_hash, _b):
     issues, tbd, owner_map = process_project_tracker(wb[sheet])
     gc.collect()
     return issues, tbd, sheet, owner_map
+
+@st.cache_data(show_spinner=False)
+def run_reclass(file_hash, _b):
+    """Projects on the Project Tracker with a non-zero 'Reclass to 2027'."""
+    wb    = _load_wb(file_hash, _b)
+    sheet = _find_sheet(wb.sheetnames, ["project tracker", "tracker"])
+    if not sheet:
+        return []
+    result = get_reclass_projects(wb[sheet])
+    gc.collect()
+    return result
+
+@st.cache_data(show_spinner=False)
+def run_write_ups(file_hash, _b):
+    """Non-zero 'Write Up / (Down)' amounts from every month tab that has the column."""
+    wb     = _load_wb(file_hash, _b)
+    result = get_write_ups(wb)
+    gc.collect()
+    return result
 
 @st.cache_data(show_spinner=False)
 def run_chargeable(oa_hash, _oa_bytes):
@@ -609,6 +629,18 @@ with st.spinner("🔄 Running analysis — please wait…") if _show_spinner els
     except Exception as e:
         st.warning(f"Tracker error: {e}")
 
+    reclass_projects = []
+    try:
+        reclass_projects = run_reclass(file_hash, sched_bytes)
+    except Exception as e:
+        st.warning(f"Reclass error: {e}")
+
+    write_ups = []
+    try:
+        write_ups = run_write_ups(file_hash, sched_bytes)
+    except Exception as e:
+        st.warning(f"Write up / down error: {e}")
+
     noncharge_all = {}
     chargeable_all = {}
     time_coverage, time_report_date = {}, None
@@ -758,6 +790,7 @@ if selected_months and not all_hours_issues and not var_error:
 owners_data = defaultdict(lambda: {
     "email": None, "first_name": "there",
     "tracker": [], "budget": [], "variance": [], "noncharge": [],
+    "reclass": [], "write_ups": [],
 })
 
 # Seed ALL valid_people who have emails so nobody is missed
@@ -785,6 +818,17 @@ for issue in budget_issues:
         owners_data[o]["email"]      = issue.get("owner_email")
         owners_data[o]["first_name"] = issue.get("owner_first", o)
     owners_data[o]["budget"].append(issue)
+
+# Reclass to 2027 and Write Up / (Down) — both go to the project owner.
+for _key, _items in (("reclass", reclass_projects), ("write_ups", write_ups)):
+    for item in _items:
+        o = _normalize_name(item.get("owner", ""))
+        if not o or (valid_people and o not in valid_people):
+            continue
+        if not owners_data[o]["email"]:
+            owners_data[o]["email"]      = item.get("owner_email")
+            owners_data[o]["first_name"] = item.get("owner_first", o)
+        owners_data[o][_key].append(item)
 
 # Build project → owner map from the full tracker (all projects, not just flagged ones)
 # This ensures variance rows for staff on any project get routed to the correct project owner.
@@ -912,6 +956,32 @@ with tab2:
                   "Has Email": "✅" if i.get("owner_email") else "❌"}
                  for i in budget_issues],
                 use_container_width=True, hide_index=True)
+
+    st.subheader("🔁 Reclass to 2027")
+    if not reclass_projects:
+        st.caption("No projects with a reclass amount on the Project Tracker.")
+    else:
+        st.dataframe(
+            [{"Client": r.get("client",""), "Project Code": r.get("project_code",""),
+              "Owner": r.get("owner",""), "Status": r.get("status",""),
+              "2026 Budget": f"${r.get('budget',0):,.0f}",
+              "Reclass to 2027": f"${r.get('reclass',0):,.0f}",
+              "Has Email": "✅" if r.get("owner_email") else "❌"}
+             for r in reclass_projects],
+            use_container_width=True, hide_index=True)
+
+    st.subheader("✏️ Write Up / (Down)")
+    if not write_ups:
+        st.caption("No write ups or write downs on any month tab.")
+    else:
+        st.dataframe(
+            [{"Month": w.get("month",""), "Client": w.get("client",""),
+              "Project Code": w.get("project_code",""), "Owner": w.get("owner",""),
+              "Write Up / (Down)": (f"${w['amount']:,.2f}" if w["amount"] >= 0
+                                    else f"(${abs(w['amount']):,.2f})"),
+              "Has Email": "✅" if w.get("owner_email") else "❌"}
+             for w in write_ups],
+            use_container_width=True, hide_index=True)
 
 with tab3:
     st.header("Non-Charge Time")
@@ -1095,6 +1165,8 @@ def _build_payload(owner_list):
             tbd_projects     = tbd_projects,
             variance_issues  = variance_list,
             noncharge_data   = data.get("noncharge", []),
+            reclass_projects = data.get("reclass", []),
+            write_ups        = data.get("write_ups", []),
             missing_time     = missing_time.get(owner),
             pto_schedule     = pto_schedule_data,
             pto_months       = _pto_month_list,
@@ -1115,6 +1187,10 @@ def _tabs_included(person: dict) -> list[str]:
         tabs.append("Budget")
     if [p for p in tbd_projects if p.get("owner") == person["owner"]]:
         tabs.append("TBD")
+    if person.get("reclass_projects"):
+        tabs.append("2027 Reclass")
+    if person.get("write_ups"):
+        tabs.append("Write Ups-Downs")
     if person["variance_issues"]:
         tabs.append("Current Month Hours")
     if person["noncharge_data"]:
