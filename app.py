@@ -24,7 +24,7 @@ from config import (
 )
 from report_export import (build_person_workbook, build_reports_zip,
                            build_consolidated_noncharge)
-from processors.budget_actual   import process_budget_actual
+from processors.budget_actual   import process_budget_actual, get_budget_lookup
 from processors.project_tracker import process_project_tracker, get_reclass_projects
 from processors.write_ups       import get_write_ups
 from processors.variance        import (
@@ -263,10 +263,19 @@ def run_reclass(file_hash, _b):
     return result
 
 @st.cache_data(show_spinner=False)
-def run_write_ups(file_hash, _b):
+def run_write_ups(file_hash, _b, _v="v2"):  # bump to bust cache after logic changes
     """Non-zero 'Write Up / (Down)' amounts from every month tab that has the column."""
     wb     = _load_wb(file_hash, _b)
     result = get_write_ups(wb)
+    # Attach budget figures so write ups on projects that aren't otherwise
+    # flagged can still show Budget Amount / Budget = Actual in the report.
+    sheet = _find_sheet(wb.sheetnames, ["budget to actual", "budget"])
+    if sheet:
+        lookup = get_budget_lookup(wb[sheet])
+        for w in result:
+            info = lookup.get(w["project_code"], {})
+            w["budget"]               = info.get("budget")
+            w["budget_equals_actual"] = info.get("budget_equals_actual", "")
     gc.collect()
     return result
 
@@ -1183,14 +1192,12 @@ def _tabs_included(person: dict) -> list[str]:
     tabs = []
     if person["tracker_issues"]:
         tabs.append("Tracker")
-    if person["budget_issues"]:
+    if person["budget_issues"] or person.get("write_ups"):
         tabs.append("Budget")
     if [p for p in tbd_projects if p.get("owner") == person["owner"]]:
         tabs.append("TBD")
     if person.get("reclass_projects"):
         tabs.append("2027 Reclass")
-    if person.get("write_ups"):
-        tabs.append("Write Ups-Downs")
     if person["variance_issues"]:
         tabs.append("Current Month Hours")
     if person["noncharge_data"]:
