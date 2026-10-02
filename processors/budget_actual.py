@@ -10,6 +10,10 @@ from __future__ import annotations
 #   I(9):  Budget Amount
 #   L(12): Remaining  <- flag if negative OR too high
 #
+# Columns are located by header text (split across rows 1-2 on this tab:
+# A-I headers are on row 2, Budget Amount / Total Scheduled / Remaining
+# on row 1). The numbers above are only fallbacks.
+#
 # Rules (Known projects only):
 #   "negative"      : remaining < -neg_thresh
 #   "not_projected" : remaining > budget_thresh
@@ -43,6 +47,29 @@ def _lookup_email(name: str) -> str | None:
         if key.lower() == name.lower():
             return email
     return None
+
+
+def _resolve_columns(ws) -> dict:
+    headers = {}
+    for r in (1, 2, 3):
+        for cell in next(ws.iter_rows(min_row=r, max_row=r, max_col=60)):
+            v = cell.value
+            if isinstance(v, str):
+                h = " ".join(v.lower().split())
+                headers.setdefault(h, cell.column)
+
+    def find(name, default):
+        return headers.get(name, default)
+
+    return {
+        "client":      find("client", COL_CLIENT),
+        "code":        find("project code", COL_CODE),
+        "status":      find("status", COL_STATUS),
+        "owner":       find("project owner", COL_OWNER),
+        "budget":      find("budget amount", COL_BUDGET),
+        "total_sched": find("total scheduled", COL_TOTAL_SCHED),
+        "remaining":   find("remaining", COL_REMAINING),
+    }
 
 
 def _budget_equals_actual(budget, total_sched) -> str:
@@ -89,17 +116,19 @@ def process_budget_actual(
         description
     """
     issues = []
+    cols   = _resolve_columns(ws)
+    max_c  = max(cols.values())
 
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        row = list(row) + [None] * 20
+    for row in ws.iter_rows(min_row=2, max_col=max_c, values_only=True):
+        row = list(row) + [None] * max_c
 
-        client    = row[COL_CLIENT - 1]
-        code      = row[COL_CODE - 1]
-        status    = row[COL_STATUS - 1]
-        owner     = row[COL_OWNER - 1]
-        budget    = _to_float(row[COL_BUDGET - 1])
-        remaining = _to_float(row[COL_REMAINING - 1])
-        total_sched = _to_float(row[COL_TOTAL_SCHED - 1])
+        client    = row[cols["client"] - 1]
+        code      = row[cols["code"] - 1]
+        status    = row[cols["status"] - 1]
+        owner     = row[cols["owner"] - 1]
+        budget    = _to_float(row[cols["budget"] - 1])
+        remaining = _to_float(row[cols["remaining"] - 1])
+        total_sched = _to_float(row[cols["total_sched"] - 1])
 
         # Skip blank rows
         if not client and not code:
