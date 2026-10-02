@@ -99,6 +99,27 @@ def _lookup_first(name: str) -> str:
     return name.split()[0] if name else "there"
 
 
+def get_budget_lookup(ws) -> dict:
+    """{project_code: {"budget", "budget_equals_actual"}} for every project on
+    the sheet, so rows added for other reasons (e.g. write ups) can still show
+    the budget figures."""
+    cols  = _resolve_columns(ws)
+    max_c = max(cols.values())
+    out   = {}
+    for row in ws.iter_rows(min_row=2, max_col=max_c, values_only=True):
+        row  = list(row) + [None] * max_c
+        code = row[cols["code"] - 1]
+        if not code:
+            continue
+        budget = _to_float(row[cols["budget"] - 1])
+        total  = _to_float(row[cols["total_sched"] - 1])
+        out.setdefault(str(code).strip(), {
+            "budget": budget,
+            "budget_equals_actual": _budget_equals_actual(budget, total),
+        })
+    return out
+
+
 def process_budget_actual(
     ws,
     budget_thresh: float = 20000,
