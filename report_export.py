@@ -338,12 +338,10 @@ def build_person_workbook(
             row_types.append("write_up")
             wu_totals.append(sum(w.get("amount", 0) or 0 for w in wu))
 
+        # Write Up / (Down) column is always shown (blank when none apply)
+        # so every owner sees the same layout.
         headers = ["Project Code", "Budget Amount", "To be reviewed", "Budget = Actual",
                    "Write Up / (Down)"]
-        if not wu_by_code:
-            # No write ups for this person — leave the column off entirely.
-            headers = headers[:-1]
-            rows    = [r[:-1] for r in rows]
         ws = _write_sheet(wb, "Budget to Actual", headers, rows)
         for idx, (t, wu_total) in enumerate(zip(row_types, wu_totals), start=2):
             if t == "negative":
