@@ -39,7 +39,7 @@ _LEFT_MID    = Alignment(horizontal="left",   vertical="center", wrap_text=False
 _CENTER_MID  = Alignment(horizontal="center", vertical="center", wrap_text=False)
 
 # Columns that hold long free-text and should wrap instead of stretching forever
-_WRAP_HEADERS = {"To be reviewed", "Notes", "Description", "Response"}
+_WRAP_HEADERS = {"To be reviewed", "Notes", "Description", "Response", "Write Up / (Down)"}
 # Columns that read better centered (short numbers/labels)
 _CENTER_HEADERS = {
     "Actual Hrs", "Scheduled Hrs", "Difference", "Chargeable Hrs",
@@ -270,24 +270,68 @@ def build_person_workbook(
             _write_sheet(wb, "Project Tracker", ["Project Code", "To be reviewed"], rows)
             any_section = True
 
-    # ── Budget to Actual ─────────────────────────────────────
-    if budget_issues:
-        rows, row_types = [], []
-        for i in budget_issues:
-            budget_val = i.get("budget", 0) or 0
+    # ── Budget to Actual (+ Write Up / (Down) from the month tabs) ──
+    if budget_issues or write_ups:
+        # Group write ups by project; a project can have one per month tab.
+        wu_by_code = {}
+        for w in (write_ups or []):
+            wu_by_code.setdefault(w.get("project_code", ""), []).append(w)
+
+        def _wu_text(items):
+            return "\n".join(f"{_money(w.get('amount', 0), cents=True)} ({w.get('month', '')})"
+                             for w in items)
+
+        def _wu_prompt(items):
+            amts = [w.get("amount", 0) or 0 for w in items]
+            if all(a > 0 for a in amts):
+                return "Please confirm this write up" if len(amts) == 1 else "Please confirm these write ups"
+            if all(a < 0 for a in amts):
+                return "Please confirm this write down" if len(amts) == 1 else "Please confirm these write downs"
+            return "Please confirm these write ups / downs"
+
+        rows, row_types, wu_totals = [], [], []
+        seen = set()
+        for i in (budget_issues or []):
+            code = i.get("project_code", "")
+            wu   = wu_by_code.get(code, [])
+            desc = i.get("description", "")
+            if wu:
+                desc = f"{desc}\n{_wu_prompt(wu)}" if desc else _wu_prompt(wu)
             rows.append([
-                i.get("project_code", ""),
-                f"${budget_val:,.0f}",
-                i.get("description", ""),
-                i.get("budget_equals_actual", "No"),
+                code, _money(i.get("budget", 0) or 0), desc,
+                i.get("budget_equals_actual", "No"), _wu_text(wu),
             ])
             row_types.append(i.get("type"))
+            wu_totals.append(sum(w.get("amount", 0) or 0 for w in wu))
+            seen.add(code)
+
+        # Write ups on projects that weren't already flagged get their own row.
+        for code, wu in wu_by_code.items():
+            if code in seen:
+                continue
+            first = wu[0]
+            budget = first.get("budget")
+            rows.append([
+                code, _money(budget) if budget is not None else "",
+                _wu_prompt(wu), first.get("budget_equals_actual", ""), _wu_text(wu),
+            ])
+            row_types.append("write_up")
+            wu_totals.append(sum(w.get("amount", 0) or 0 for w in wu))
+
         ws = _write_sheet(
             wb, "Budget to Actual",
-            ["Project Code", "Budget Amount", "To be reviewed", "Budget = Actual"], rows,
+            ["Project Code", "Budget Amount", "To be reviewed", "Budget = Actual",
+             "Write Up / (Down)"], rows,
         )
-        for idx, t in enumerate(row_types, start=2):
-            ws.cell(row=idx, column=3).font = _NEG_FONT if t == "negative" else _POS_FONT
+        for idx, (t, wu_total) in enumerate(zip(row_types, wu_totals), start=2):
+            if t == "negative":
+                ws.cell(row=idx, column=3).font = _NEG_FONT
+            elif t == "not_projected":
+                ws.cell(row=idx, column=3).font = _POS_FONT
+            if wu_total:
+                ws.cell(row=idx, column=5).font = _NEG_FONT if wu_total < 0 else _POS_FONT
+                ws.cell(row=idx, column=5).alignment = Alignment(
+                    horizontal="center", vertical="center", wrap_text=True)
         any_section = True
 
     # ── TBD / Pending SOW ─────────────────────────────────────
@@ -313,22 +357,6 @@ def build_person_workbook(
         _write_sheet(wb, "2027 Reclass",
                      ["Project Code", "Status", "2026 Budget", "Reclass to 2027",
                       "To be reviewed"], rows)
-        any_section = True
-
-    # ── Write Up / (Down) (month tabs) ───────────────────────
-    if write_ups:
-        rows, amounts = [], []
-        for w in write_ups:
-            amt = w.get("amount", 0) or 0
-            rows.append([
-                w.get("month", ""), w.get("project_code", ""), _money(amt, cents=True),
-                "Please confirm this write up" if amt > 0 else "Please confirm this write down",
-            ])
-            amounts.append(amt)
-        ws = _write_sheet(wb, "Write Ups-Downs",
-                          ["Month", "Project Code", "Write Up / (Down)", "To be reviewed"], rows)
-        for idx, amt in enumerate(amounts, start=2):
-            ws.cell(row=idx, column=3).font = _NEG_FONT if amt < 0 else _POS_FONT
         any_section = True
 
     if time_banner and not variance_issues:
