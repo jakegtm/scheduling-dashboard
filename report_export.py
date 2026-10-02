@@ -45,6 +45,7 @@ _CENTER_HEADERS = {
     "Actual Hrs", "Scheduled Hrs", "Difference", "Chargeable Hrs",
     "Remaining Hrs", "Utilization", "Goal", "PTO Hours", "Status", "Budget",
     "Budget Amount", "Budget = Actual", "Hrs", "Date",
+    "Month", "2026 Budget", "Reclass to 2027", "Write Up / (Down)",
 }
 _NUMERIC_HEADERS = {"Actual Hrs", "Scheduled Hrs", "Difference", "Hrs"}
 
@@ -52,6 +53,14 @@ _MIN_WIDTH      = 10
 _MAX_WIDTH      = 32
 _MAX_WRAP_WIDTH = 48
 _CHARS_PER_LINE = 46  # fallback line-width estimate (row height now uses actual column width)
+
+
+def _money(val, cents: bool = False) -> str:
+    """$1,234 / ($1,234) — negatives in parentheses, matching the schedule file."""
+    if val is None:
+        return ""
+    fmt = f"{abs(val):,.2f}" if cents else f"{abs(val):,.0f}"
+    return f"(${fmt})" if val < 0 else f"${fmt}"
 
 
 def _next_monday() -> str:
@@ -191,6 +200,8 @@ def build_person_workbook(
     tbd_projects: list,
     variance_issues: list,
     noncharge_data: list  = None,
+    reclass_projects: list = None,
+    write_ups: list       = None,
     missing_time: dict    = None,
     pto_schedule: dict    = None,
     pto_months: list      = None,
@@ -289,6 +300,35 @@ def build_person_workbook(
             for p in owner_tbd
         ]
         _write_sheet(wb, "TBD Projects", ["Project Code", "Status", "Budget", "Notes"], rows)
+        any_section = True
+
+    # ── 2027 Reclass (Project Tracker) ───────────────────────
+    if reclass_projects:
+        rows = [
+            [p.get("project_code", ""), p.get("status", ""),
+             _money(p.get("budget")), _money(p.get("reclass")),
+             "Please confirm the amount being reclassed to 2027"]
+            for p in reclass_projects
+        ]
+        _write_sheet(wb, "2027 Reclass",
+                     ["Project Code", "Status", "2026 Budget", "Reclass to 2027",
+                      "To be reviewed"], rows)
+        any_section = True
+
+    # ── Write Up / (Down) (month tabs) ───────────────────────
+    if write_ups:
+        rows, amounts = [], []
+        for w in write_ups:
+            amt = w.get("amount", 0) or 0
+            rows.append([
+                w.get("month", ""), w.get("project_code", ""), _money(amt, cents=True),
+                "Please confirm this write up" if amt > 0 else "Please confirm this write down",
+            ])
+            amounts.append(amt)
+        ws = _write_sheet(wb, "Write Ups-Downs",
+                          ["Month", "Project Code", "Write Up / (Down)", "To be reviewed"], rows)
+        for idx, amt in enumerate(amounts, start=2):
+            ws.cell(row=idx, column=3).font = _NEG_FONT if amt < 0 else _POS_FONT
         any_section = True
 
     if time_banner and not variance_issues:
