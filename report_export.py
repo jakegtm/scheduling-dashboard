@@ -37,17 +37,21 @@ _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _LEFT_TOP    = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
 _LEFT_MID    = Alignment(horizontal="left",   vertical="center", wrap_text=False)
 _CENTER_MID  = Alignment(horizontal="center", vertical="center", wrap_text=False)
+_MONEY_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
 # Columns that hold long free-text and should wrap instead of stretching forever
-_WRAP_HEADERS = {"To be reviewed", "Notes", "Description", "Response", "Write Up / (Down)"}
+_WRAP_HEADERS = {"To be reviewed", "Notes", "Description", "Response"}
 # Columns that read better centered (short numbers/labels)
 _CENTER_HEADERS = {
     "Actual Hrs", "Scheduled Hrs", "Difference", "Chargeable Hrs",
     "Remaining Hrs", "Utilization", "Goal", "PTO Hours", "Status", "Budget",
     "Budget Amount", "Budget = Actual", "Hrs", "Date",
-    "Month", "2026 Budget", "Reclass to 2027", "Write Up / (Down)",
+    "Month", "2026 Budget", "Reclass to 2027", "Total Budget", "Write Up / (Down)",
 }
 _NUMERIC_HEADERS = {"Actual Hrs", "Scheduled Hrs", "Difference", "Hrs"}
+# Dollar columns: every value goes through _money(); negatives show red.
+_MONEY_HEADERS = {"Budget", "Budget Amount", "2026 Budget", "Reclass to 2027",
+                  "Total Budget", "Write Up / (Down)"}
 
 _MIN_WIDTH      = 10
 _MAX_WIDTH      = 32
@@ -55,12 +59,19 @@ _MAX_WRAP_WIDTH = 48
 _CHARS_PER_LINE = 46  # fallback line-width estimate (row height now uses actual column width)
 
 
-def _money(val, cents: bool = False) -> str:
-    """$1,234 / ($1,234) — negatives in parentheses, matching the schedule file."""
+def _money(val) -> str:
+    """The one dollar format used everywhere in the reports:
+    $1,234 / ($1,234) — whole dollars, negatives in parentheses."""
     if val is None:
         return ""
-    fmt = f"{abs(val):,.2f}" if cents else f"{abs(val):,.0f}"
-    return f"(${fmt})" if val < 0 else f"${fmt}"
+    rounded = round(val)
+    if rounded == 0:
+        return "$0"
+    return f"(${abs(rounded):,.0f})" if rounded < 0 else f"${rounded:,.0f}"
+
+
+def _is_negative_money(text) -> bool:
+    return isinstance(text, str) and text.startswith("($")
 
 
 def _next_monday() -> str:
@@ -162,10 +173,19 @@ def _write_sheet(wb, title, headers, rows, response_col=True, banner=None):
                         for seg in text.split("\n")
                     )
                     max_lines = max(max_lines, lines)
+            elif header in _MONEY_HEADERS:
+                # Centered like the other figures; wraps so a multi-month
+                # write up (one amount per line) stays readable.
+                cell.alignment = _MONEY_ALIGN
+                if isinstance(cell.value, str):
+                    max_lines = max(max_lines, cell.value.count("\n") + 1)
             elif header in _CENTER_HEADERS:
                 cell.alignment = _CENTER_MID
             else:
                 cell.alignment = _LEFT_MID
+
+            if header in _MONEY_HEADERS and _is_negative_money(cell.value):
+                cell.font = _NEG_FONT
 
             if header in _NUMERIC_HEADERS and isinstance(cell.value, (int, float)):
                 cell.number_format = "#,##0.0;-#,##0.0;0"
@@ -278,7 +298,7 @@ def build_person_workbook(
             wu_by_code.setdefault(w.get("project_code", ""), []).append(w)
 
         def _wu_text(items):
-            return "\n".join(f"{_money(w.get('amount', 0), cents=True)} ({w.get('month', '')})"
+            return "\n".join(f"{_money(w.get('amount', 0))} ({w.get('month', '')})"
                              for w in items)
 
         def _wu_prompt(items):
@@ -318,11 +338,13 @@ def build_person_workbook(
             row_types.append("write_up")
             wu_totals.append(sum(w.get("amount", 0) or 0 for w in wu))
 
-        ws = _write_sheet(
-            wb, "Budget to Actual",
-            ["Project Code", "Budget Amount", "To be reviewed", "Budget = Actual",
-             "Write Up / (Down)"], rows,
-        )
+        headers = ["Project Code", "Budget Amount", "To be reviewed", "Budget = Actual",
+                   "Write Up / (Down)"]
+        if not wu_by_code:
+            # No write ups for this person — leave the column off entirely.
+            headers = headers[:-1]
+            rows    = [r[:-1] for r in rows]
+        ws = _write_sheet(wb, "Budget to Actual", headers, rows)
         for idx, (t, wu_total) in enumerate(zip(row_types, wu_totals), start=2):
             if t == "negative":
                 ws.cell(row=idx, column=3).font = _NEG_FONT
@@ -330,8 +352,6 @@ def build_person_workbook(
                 ws.cell(row=idx, column=3).font = _POS_FONT
             if wu_total:
                 ws.cell(row=idx, column=5).font = _NEG_FONT if wu_total < 0 else _POS_FONT
-                ws.cell(row=idx, column=5).alignment = Alignment(
-                    horizontal="center", vertical="center", wrap_text=True)
         any_section = True
 
     # ── TBD / Pending SOW ─────────────────────────────────────
@@ -339,7 +359,7 @@ def build_person_workbook(
     if owner_tbd:
         rows = [
             [p.get("project_code", ""), p.get("status", "TBD"),
-             f"${p.get('budget', 0):,.0f}" if p.get("budget") else "TBD",
+             _money(p.get("budget")) if p.get("budget") else "TBD",
              p.get("notes", "")]
             for p in owner_tbd
         ]
@@ -351,12 +371,13 @@ def build_person_workbook(
         rows = [
             [p.get("project_code", ""), p.get("status", ""),
              _money(p.get("budget")), _money(p.get("reclass")),
+             _money((p.get("budget") or 0) + (p.get("reclass") or 0)),
              "Please confirm the amount being reclassed to 2027"]
             for p in reclass_projects
         ]
         _write_sheet(wb, "2027 Reclass",
                      ["Project Code", "Status", "2026 Budget", "Reclass to 2027",
-                      "To be reviewed"], rows)
+                      "Total Budget", "To be reviewed"], rows)
         any_section = True
 
     if time_banner and not variance_issues:
