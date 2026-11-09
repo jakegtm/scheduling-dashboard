@@ -272,8 +272,8 @@ def run_reclass(file_hash, _b):
     return result
 
 @st.cache_data(show_spinner=False)
-def run_write_ups(file_hash, _b, _v="v2"):  # bump to bust cache after logic changes
-    """Non-zero 'Write Up / (Down)' amounts from every month tab that has the column."""
+def run_write_ups(file_hash, _b, _v="v3", month_key=None):  # bump _v to bust cache; month_key re-runs it each new month
+    """Non-zero 'Write Up / (Down)' amounts from the current and future month tabs."""
     wb     = _load_wb(file_hash, _b)
     result = get_write_ups(wb)
     # Attach budget figures so write ups on projects that aren't otherwise
@@ -655,7 +655,7 @@ with st.spinner("🔄 Running analysis — please wait…") if _show_spinner els
 
     write_ups = []
     try:
-        write_ups = run_write_ups(file_hash, sched_bytes)
+        write_ups = run_write_ups(file_hash, sched_bytes, month_key=_date_cls.today().strftime("%Y-%m"))
     except Exception as e:
         st.warning(f"Write up / down error: {e}")
 
@@ -991,7 +991,7 @@ with tab2:
 
     st.subheader("✏️ Write Up / (Down)")
     if not write_ups:
-        st.caption("No write ups or write downs on any month tab.")
+        st.caption("No write ups or write downs on the current or future month tabs.")
     else:
         st.dataframe(
             [{"Month": w.get("month",""), "Client": w.get("client",""),
