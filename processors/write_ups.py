@@ -13,7 +13,14 @@ from __future__ import annotations
 #
 # The column is found by header text, so tabs without it (Jan–Aug, Jan27)
 # are skipped automatically and picked up as soon as the column is added.
+#
+# Only the current month and future months are included; past month tabs
+# are skipped. Tab years come from a 2- or 4-digit suffix (e.g. "Jan27");
+# unsuffixed tabs inherit the year from tab order (rolling over Dec -> Jan).
 # ============================================================
+
+import re
+from datetime import date
 
 from processors.project_tracker import _lookup_email as lookup_email, _lookup_first as lookup_first_name
 
@@ -32,6 +39,35 @@ def _norm(v) -> str:
 def _is_month_tab(name: str) -> bool:
     low = name.lower().strip()
     return low.startswith(_MONTH_PREFIXES) and "actual" not in low
+
+
+_YEAR_SUFFIX_RE = re.compile(r"(\d{4}|\d{2})\s*$")
+
+
+def _month_num(name: str):
+    low = name.lower().strip()
+    for i, p in enumerate(_MONTH_PREFIXES):
+        if low.startswith(p):
+            return i + 1
+    return None
+
+
+def _tab_periods(names: list, today: date) -> dict:
+    """Map each month tab name to (year, month), using tab order for the year."""
+    seq, offset, prev = [], 0, None
+    anchor = None                      # (year offset, explicit year)
+    for name in names:
+        m = _month_num(name)
+        if prev is not None and m < prev:
+            offset += 1                # Dec -> Jan rollover
+        prev = m
+        seq.append((name, offset, m))
+        sfx = _YEAR_SUFFIX_RE.search(name.strip())
+        if sfx and anchor is None:
+            y = int(sfx.group(1))
+            anchor = (offset, y if y >= 100 else 2000 + y)
+    base = anchor[1] - anchor[0] if anchor else today.year
+    return {name: (base + off, m) for name, off, m in seq}
 
 
 def _find_writeup_col(ws):
@@ -61,12 +97,15 @@ def get_write_ups(wb) -> list:
     """
     Returns a list of dicts, in workbook tab order:
         month, client, project_code, owner, owner_email, owner_first, amount
-    Only non-zero amounts are returned.
+    Only non-zero amounts from the current and future month tabs are returned.
     """
     out = []
-    for name in wb.sheetnames:
-        if not _is_month_tab(name):
-            continue
+    today   = date.today()
+    months  = [n for n in wb.sheetnames if _is_month_tab(n)]
+    periods = _tab_periods(months, today)
+    for name in months:
+        if periods[name] < (today.year, today.month):
+            continue                   # past month — skip
         ws = wb[name]
         wu_col = _find_writeup_col(ws)
         if not wu_col:
